@@ -1,0 +1,9 @@
+// Optional AI classifier. Isolated in its own module so the default path
+// carries no AI dependency at all.
+//
+// Deliberately has no AI SDK on the classpath: classification shells out to the
+// local `claude` CLI, so there are no keys to manage and no network code here.
+dependencies {
+    implementation project(':codemap-core')
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+}

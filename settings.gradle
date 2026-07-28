@@ -1,0 +1,13 @@
+pluginManagement {
+    plugins {
+        // Version resolved from gradle.properties — one place for all pins.
+        id 'com.gradleup.shadow' version "${shadowVersion}"
+    }
+}
+
+rootProject.name = 'codemap'
+
+include 'codemap-core'
+include 'codemap-render'
+include 'codemap-cli'
+include 'codemap-ai'

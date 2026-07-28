@@ -12,8 +12,21 @@ methods touched by recent git changes are outlined in colour on top of that.
 
 ## Status
 
-Not implemented yet. This README and [`doc/specification.md`](doc/specification.md)
-are the specification the implementation follows.
+**In development.** The build and CLI exist: the tool runs, validates its
+arguments, and reports the configuration it resolved. **No analysis happens
+yet** — running it prints the resolved settings and says so.
+
+Progress is tracked as milestones M1–M8; see the
+[issues](https://github.com/kekukhvy/Codemap/issues).
+
+| | Milestone | State |
+|---|---|---|
+| M1 | Project skeleton — modules, CLI, fat JAR | ✅ done |
+| M2 | Index the code | ⏳ next |
+| M3–M8 | Call graph → report → incremental → config/AI | planned |
+
+The rest of this document describes the tool as specified; see
+[`doc/specification.md`](doc/specification.md) for the design rationale.
 
 ---
 
@@ -76,15 +89,17 @@ files and git metadata only.
 ## Usage
 
 ```bash
-# Build the tool
+# Build the tool (produces codemap-cli/build/libs/codemap.jar)
 ./gradlew build
 
 # Map a project, marking changes relative to main
-java -jar build/libs/codemap.jar --root /path/to/project --base main
+java -jar codemap-cli/build/libs/codemap.jar --root /path/to/project --base main
 
 # Or through Gradle
-./gradlew run --args="--root /path/to/project --base main"
+./gradlew :codemap-cli:run --args="--root /path/to/project --base main"
 ```
+
+Run without arguments to see the flags.
 
 ### Options
 

@@ -1,0 +1,15 @@
+<configuration>
+
+    <!-- Console output is the tool's user interface: keep it terse. Timestamps
+         and logger names add noise to what is effectively CLI feedback. -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%-5level %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+</configuration>
