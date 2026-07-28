@@ -1,0 +1,23 @@
+# Build
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Claude Code config — currently copied from another project (Kairos) and not
+# yet adapted to Codemap. Kept local until it is rewritten for this repo.
+.claude/
+
+# Codemap output (build artifacts — regenerate with a run)
+codemap/index.json
+codemap/report.html
+
+# OS
+.DS_Store

@@ -1,0 +1,497 @@
+# Codemap — Specification
+
+> An interactive mindmap of a Java application, rooted in **entry points**, with
+> call-chain navigation in both directions and git change highlighting layered on
+> top.
+
+This document is the source of truth for *why* Codemap is built the way it is.
+Per-slice specs live in [`specs/`](specs/). User-facing instructions live in the
+[README](../README.md).
+
+---
+
+## 1. Problem
+
+Reading an unfamiliar Java service is slow. The tools available answer the wrong
+question:
+
+- **Package trees** show how files were filed away. A `service` package does not
+  say which of its classes is reachable from a live request and which is dead.
+- **IDE "find usages"** answers one hop at a time. Reconstructing "what actually
+  happens when this endpoint is hit" means dozens of jumps, held in your head.
+- **Diff views** show what changed, but not what the changed code is *part of*.
+
+The question a developer actually asks on joining a codebase — or returning to
+one after a month — is:
+
+> What can this application do, and what happens when each of those things runs?
+
+Codemap answers that by rooting the map in the places the outside world can
+reach, and letting the reader walk the chain from there.
+
+**Audience:** developers reading or reviewing a Java service — onboarding,
+reviewing a PR, or reorienting before a change.
+
+---
+
+## 2. Scope
+
+### In
+
+- Static analysis of Java **production** source (JavaParser + symbol solver).
+- Entry-point detection: REST (annotated and programmatic), scheduled jobs,
+  message listeners, WebSocket endpoints, UI routes, `main()`.
+- A project-internal call graph, navigable in both directions.
+- Git-derived change status per class and method.
+- A single self-contained `report.html`.
+- Incremental re-indexing.
+- Optional AI classification of entry points the rules could not resolve.
+
+### Out
+
+- **Test sources.** `src/test/java` and equivalents are not indexed at all — not
+  parsed, not shown, not counted. See §3.5.
+- **Languages other than Java.** Not Kotlin, not polyglot repos.
+- **Runtime tracing.** Codemap never executes or instruments the analysed
+  project. Everything is derived from source and git.
+- **Editing.** The map is read-only; it is not an IDE.
+- **Hosting.** Output is a local file. No server, no CI integration, no
+  dashboard.
+- **Build integration.** Codemap never compiles the analysed project and adds
+  nothing to its build.
+- **Metrics.** No complexity scores, coverage, or quality gates.
+
+---
+
+## 3. Core model
+
+### 3.1 The graph is the structure; the tree is a view
+
+The underlying data is a **directed graph** of methods connected by calls. It is
+not a tree: a method is reachable from several entry points, and cycles occur
+through recursion and mutual calls.
+
+The mindmap presents this graph as a tree that **grows on expansion**. Codemap
+never materialises the full reachable set upfront. One level is rendered; the
+next is produced when the user opens a node.
+
+This single decision resolves three problems at once:
+
+| Problem | Resolution |
+|---|---|
+| Combinatorial explosion | Only expanded paths are ever rendered |
+| Cycles | A user cannot loop infinitely by hand; revisits are marked |
+| Shared nodes (e.g. a model used everywhere) | Duplicated only where actually opened |
+
+**Revisit rule.** When expansion reaches a method already expanded higher in the
+current branch, it renders collapsed with an `↗ already above` badge linking to
+the original occurrence. The cycle terminates and the identity stays visible.
+
+### 3.2 Node kinds
+
+| Kind | Meaning |
+|---|---|
+| `MODULE` | Root: one build module of the analysed project |
+| `ENTRY_POINT` | An externally reachable trigger |
+| `CLASS` | A class, interface, enum, or record |
+| `METHOD` | A method or constructor |
+| `TYPE_REF` | A type appearing in a signature |
+
+### 3.2.1 Modules are the top-level roots
+
+A multi-module project is **not** flattened into one application root. Each build
+module (Gradle subproject or Maven module) is its own root, and its entry points
+hang beneath it:
+
+```
+kairos-api          ← module root
+├── POST /api/v1/tasks
+├── GET  /api/v1/tasks
+└── main()
+kairos-admin        ← module root
+├── @Route /tasks
+└── main()
+```
+
+This matches how such systems are actually deployed: in the reference project
+each runnable module is a separate process and a separate container. Collapsing
+them into one root would draw a picture of a monolith that does not exist.
+
+Modules are discovered from `settings.gradle`, `pom.xml`, or by locating
+`src/main/java` roots when neither is present. A single-module project yields one
+root and the distinction costs nothing.
+
+### 3.2.2 Cross-module connections
+
+Modules are roots, but they are not isolated. When a call, type reference, or
+port implementation crosses a module boundary, the map draws a **connector** —
+visually distinct from an in-module edge, and collapsed by default so the tree
+stays readable.
+
+This is what makes the API surface between modules visible: shared contracts, a
+port declared in one module and implemented in another, an SDK consumed by a
+service. A **module-level overview** aggregates these into a
+"which module depends on which" diagram, which is often the first thing a reader
+wants and the last thing a package tree can show.
+
+Connectors are `CROSS_MODULE` edges carrying the source and target module ids.
+
+### 3.3 Edge kinds
+
+| Edge | Rendering | Meaning |
+|---|---|---|
+| `CALL_INTERNAL` | Dashed `╌╌` | Call to a method of the same class |
+| `CALL_EXTERNAL` | Solid `──→` | Call crossing into another class |
+| `CROSS_MODULE` | Heavy, collapsed | Call or reference crossing a module boundary |
+| `USES_TYPE` | Thin | A type used in a signature |
+| `IMPLEMENTS` | Hollow | Interface → implementation |
+
+The internal/external distinction is deliberate. A call within a class is a
+local detail and should not pull the reader's eye out of the current card; a call
+that crosses a class boundary is an architectural fact and deserves a visible
+arrow to a named collaborator.
+
+**`USES_TYPE` does not continue a chain.** A type is not an invocation. Selecting
+a type shows where it is used and what methods it declares, but chains do not
+propagate *through* it. Conflating the two would imply calls that do not exist.
+
+### 3.4 Layers
+
+Each class is assigned a layer from its package path, configurable per project:
+
+`ENTRY` · `APPLICATION` · `DOMAIN` · `INFRASTRUCTURE` · `SUPPORT` · `UNKNOWN`
+
+Layers drive the side panel badge and the layer filter. They also make
+architectural violations visible: a `DOMAIN` node with a solid edge into
+`INFRASTRUCTURE` is a dependency pointing the wrong way, and the map shows it
+without any dedicated rule.
+
+### 3.5 Test sources are excluded entirely
+
+Test sources are **not indexed** — not parsed, not stored, not rendered, and not
+filterable back in.
+
+The map answers "what does this application do in production". Tests are not part
+of that: they are not reachable from any entry point, they invert the call
+direction (a test calls production code, so every method gains callers that never
+run in production), and in a well-tested project they outnumber production code —
+in the reference project, 941 `@Test` methods against 277 source files.
+
+This also **dissolves the interface fan-out problem**. A port like
+`TaskRepository` has a real implementation and an in-memory test double; indexing
+both means every call through the port forks into a path that cannot execute in
+production. Excluding test sources leaves the real implementation only, and the
+chain stays true.
+
+Concretely: skip `src/test/java`, `src/it/java`, `src/integrationTest/java`, and
+any source root a build file marks as a test source set. Consequence to accept:
+a class used *only* by tests appears as an orphan with no callers — correct, and
+in fact useful, since that is what it is in production.
+
+---
+
+## 4. Entry-point detection
+
+### 4.1 Deterministic first
+
+Detection is rule-based by default. AI is a fallback, never the primary path —
+rules are reproducible, free, and instant.
+
+**Annotation rules:**
+
+| Kind | Recognised by |
+|---|---|
+| `REST` | `@RestController`/`@Controller` + `@GetMapping`/`@PostMapping`/`@RequestMapping`; JAX-RS `@Path` + `@GET`/`@POST` |
+| `JOB` | `@Scheduled`; Quartz `Job.execute` |
+| `MESSAGE` | `@KafkaListener`, `@RabbitListener`, `@JmsListener` |
+| `SOCKET` | `@ServerEndpoint`, `@MessageMapping` |
+| `UI` | Vaadin `@Route` |
+| `BOOTSTRAP` | `public static void main`; `CommandLineRunner.run` |
+
+**Programmatic registration rules.** Annotations are not the only form, and in
+some codebases not the dominant one. Codemap recognises route registration
+expressions:
+
+```java
+app.post(TASKS, taskHandler::create);
+```
+
+This yields the HTTP method (`post`), the path (resolved by constant-folding
+`TASKS` → `/api/v1/tasks`), and the target method (`TaskHandler.create`) — a
+complete entry point with no annotation present.
+
+Supported: Javalin, Spark. The matcher keys on a call whose receiver is a known
+server type, whose first argument resolves to a string constant, and whose second
+argument is a method reference or lambda.
+
+> **Grounding note.** This rule is not hypothetical. The reference project
+> (Kairos) registers every one of its REST routes this way, and uses annotations
+> only in its Vaadin admin module. A detector that handled annotations alone
+> would find `main()` and the UI, and miss the entire API.
+
+### 4.2 Project rules (`codemap.yml`)
+
+Projects with their own conventions extend detection declaratively:
+
+```yaml
+entryPoints:
+  - kind: JOB
+    label: "Engine claim loop"
+    match:
+      implements: dev.kairos.engine.ClaimLoop
+      method: run
+
+layers:
+  DOMAIN: ["**.domain.**"]
+  APPLICATION: ["**.application.**"]
+```
+
+Match predicates: `annotation`, `implements`, `extends`, `classNamePattern`,
+`method`, `inPackage`. Predicates in one rule are ANDed.
+
+### 4.3 The `--ai` fallback
+
+Some entry points are conventions rather than syntax — a hand-rolled dispatcher,
+a worker that is a root by meaning only. No static rule catches these without
+being written for that specific project.
+
+With `--ai`, the AI **does not search from scratch**. The pipeline is:
+
+1. Rules and config run to completion.
+2. Codemap computes **orphan roots**: public classes that nothing else in the
+   project calls, and that no rule claimed. These are natural root candidates.
+3. Only those, with their signatures and Javadoc, are sent for classification.
+4. The agent returns a kind and label per candidate, or "not an entry point".
+
+Constraints:
+
+- Every entry point records `detectedBy: RULE | CONFIG | AI`, surfaced in the UI.
+- AI results are **cached in the index**. A later run without `--ai` keeps them
+  rather than losing them.
+- AI never overrides a rule-detected entry point.
+- `--ai` is **off by default**.
+
+Rationale: the map must stay reproducible and auditable. A reader has to be able
+to tell a fact derived from syntax from a guess made by a model.
+
+#### Invocation: shell out to the local `claude` CLI
+
+Codemap does **not** embed an AI SDK or manage API keys. It shells out to the
+`claude` binary already installed on the developer's machine:
+
+```
+claude --print --output-format json  <  <candidates.json>
+```
+
+| Consequence | Detail |
+|---|---|
+| No key management | Codemap never stores, reads, or transmits credentials |
+| No SDK dependency | `codemap-ai` shells out; nothing is linked in |
+| Uses the existing session | Whatever the developer is already authenticated with |
+| Degrades cleanly | Binary absent → warning, rule-only results, exit 0 |
+
+The classifier detects the binary on `PATH`, sends candidates as JSON on stdin,
+and parses JSON from stdout. A non-zero exit, a parse failure, or a timeout is
+**never fatal** — the run completes with rule-detected entry points and a warning.
+
+Trade-off accepted: this requires `claude` to be installed, and it makes Codemap
+dependent on an interface it does not control. In exchange, the default install
+carries no AI dependency, no key handling, and no network code at all — which is
+what keeps `--ai` a genuine fallback rather than a second product.
+
+---
+
+## 5. Change highlighting
+
+Change status is an **overlay**, not the organising principle. The map is worth
+opening with no diff at all.
+
+| Status | Definition |
+|---|---|
+| `added` | The method exists now and its lines are all new in the diff |
+| `changed` | Some of the method's lines fall inside a diff hunk |
+| `removed` | Present in the base revision, absent now |
+| `affected` | Unchanged, but one call hop from a changed method (either direction) |
+| `unchanged` | Everything else |
+
+`affected` is the highest-value status: it names the code most likely to break
+without appearing in the diff. It is deliberately **one hop only** — two hops
+marks most of the codebase and stops meaning anything.
+
+Sources: `git diff --unified=0 <base>` for the working tree, or `--since` for a
+commit range. Line ranges are mapped onto method ranges from the index.
+
+`removed` methods are recovered from diff hunks rather than by parsing the base
+revision, so they have no body to display. Parsing the base tree would double
+indexing cost for a rarely used status.
+
+---
+
+## 6. Architecture
+
+### 6.1 Pipeline
+
+```
+Discover → Parse → Resolve → Detect → Diff → Render
+ sources   AST    call graph  entry    git    HTML
+                              points  status
+```
+
+Each stage has one responsibility and communicates through the index model.
+Stages are independently testable: parsing needs no git, diffing needs no AST.
+
+### 6.2 Modules
+
+```
+codemap-core/      # model, parser, call graph, entry-point rules, diff
+codemap-render/    # index.json → report.html
+codemap-cli/       # picocli entry point, config loading
+codemap-ai/        # optional AI classifier (isolated so core never depends on it)
+```
+
+`codemap-core` has no dependency on the renderer or the CLI. The AI classifier is
+its own module so that the default path carries no AI dependency at all.
+
+### 6.3 Stack
+
+| Concern | Choice | Rationale |
+|---|---|---|
+| Language | Java 21+ | Matches the analysed domain |
+| Parsing | JavaParser + symbol solver | Real AST; resolves overloads |
+| CLI | picocli | Standard, annotation-driven |
+| JSON | Jackson | Index serialisation |
+| Config | SnakeYAML | `codemap.yml` |
+| Rendering | D3.js via CDN, inlined | Collapsible tree, no build step |
+| Build | Gradle, fat JAR | Single-artifact distribution |
+
+**No Spring.** Codemap is a short-lived CLI process: start, analyse, write, exit.
+A DI container costs startup time and adds a dependency without earning anything
+in return.
+
+**Symbol solver is not optional.** It is what makes the call graph trustworthy —
+it distinguishes overloads instead of merging them by name, so two different
+`requireText(...)` calls from one method remain two distinct edges. The cost is
+configuration: the solver needs every source root, and unresolvable symbols must
+degrade to a name-based edge marked `resolved: false` rather than failing the run.
+
+### 6.4 Index format
+
+`codemap/index.json`:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-28T21:00:00Z",
+  "root": "/path/to/project",
+  "base": "main",
+  "files":   { "<path>": { "hash": "…", "mtime": 0, "size": 0 } },
+  "modules": [ { "id","name","path","sourceRoots" } ],
+  "classes": [ { "id","moduleId","fqn","simpleName","kind","layer","file",
+                 "lineStart","lineEnd","javadoc","status" } ],
+  "methods": [ { "id","classId","name","signature","file",
+                 "lineStart","lineEnd","javadoc","source","status" } ],
+  "calls":   [ { "from","to","kind","resolved","line" } ],
+  "entryPoints": [ { "id","moduleId","kind","label","methodId",
+                     "detectedBy","source" } ]
+}
+```
+
+The index doubles as the incremental cache: `files` carries hash, mtime, and size
+so a rerun reparses only what changed.
+
+### 6.5 Incremental re-indexing
+
+1. Load `index.json` if present and `schemaVersion` matches.
+2. Compare each file by size and mtime; on a match assume unchanged, otherwise
+   compare content hash.
+3. Reparse only changed files; drop their classes, methods, and outgoing calls.
+4. Recompute the call graph and entry points (cheap relative to parsing).
+
+Call edges *into* a reparsed file from unchanged files must be revalidated — a
+method may have been renamed or deleted. Edges whose target no longer exists are
+dropped and reported as unresolved.
+
+`--rebuild` discards the cache.
+
+### 6.6 Report
+
+`report.html` is a single self-contained file: inlined CSS, inlined JavaScript,
+D3 vendored inline, and the index embedded as JSON. It must render over `file://`
+with no server and no network access, so it can be copied or attached to a review
+and still work.
+
+Method source is embedded in the index rather than read at view time, since the
+browser cannot read local files under `file://`.
+
+---
+
+## 7. Acceptance criteria
+
+Derived from the original brief; all must hold before the tool is considered
+done.
+
+- [ ] Runs on a real project with one command and does not crash.
+- [ ] `report.html` opens in a browser with no server and no console errors.
+- [ ] The tree shows real packages, classes, and methods — no placeholders.
+- [ ] Each build module is its own root; entry points hang beneath their module.
+- [ ] Cross-module connectors are drawn and a module-level overview is available.
+- [ ] No test source appears anywhere in the map.
+- [ ] Entry points are detected and are the roots of the map.
+- [ ] Programmatic (non-annotated) REST routes are detected with method and path.
+- [ ] Clicking a method shows its genuine source, sliced from the file.
+- [ ] The side panel lists **Called by** and **Calls**, both navigable.
+- [ ] Same-class calls render dashed; cross-class calls render as arrows.
+- [ ] A revisited node shows `↗ already above` and does not loop.
+- [ ] After a test edit, at least one node shows `changed` and is outlined green.
+- [ ] Neighbours of a changed method show `affected`.
+- [ ] A rerun after a one-file edit is measurably faster than the first run.
+- [ ] `--ai` is off by default; with it on, results are cached and labelled.
+
+### Verification project
+
+Correctness is verified against **Kairos** (`../kairos`, 277 production Java
+files across 10 Gradle modules), which exercises every detection style in one
+codebase:
+
+| Style | Where |
+|---|---|
+| Programmatic REST | `kairos-api` — Javalin method references |
+| Annotations | `kairos-admin` — Vaadin `@Route` |
+| Bootstrap | `main()` in both `kairos-api` and `kairos-admin` |
+| Multi-module | 10 Gradle subprojects, deployed as separate processes |
+| Cross-module | `common` contracts shared by `kairos-api` and `kairos-admin` |
+
+It is also a genuine hexagonal codebase, so layer assignment and port/adapter
+structure can be judged against real architecture — and it has 941 `@Test`
+methods, which makes it a real test of the exclusion rule in §3.5.
+
+---
+
+## 8. Known limitations
+
+- **Java only.**
+- **Interface dispatch still fans out when a port has several production
+  implementations.** Excluding test sources (§3.5) removes the common case — the
+  in-memory test double — but a port with two real adapters (e.g. Kafka and
+  webhook delivery) legitimately reaches both, and static analysis cannot say
+  which is wired at runtime. Both are shown.
+- **Reflection, DI-by-name, and dynamic proxies are invisible.** Chains passing
+  through them break; nothing in static analysis can recover them.
+- **Test-only classes appear as orphans**, since nothing in production calls them
+  (§3.5). This is accurate rather than a defect, but it can surprise.
+- **`removed` nodes have no body** (see §5).
+- **Generated sources** (JOOQ, MapStruct) inflate the map. Excluded by default
+  via a `build/generated` path filter, overridable in config.
+
+---
+
+## 9. Deferred
+
+Deliberately out of the first version, recorded so the design does not preclude
+them:
+
+- Kotlin support.
+- A `--serve` mode with live re-indexing on file change.
+- Cross-module maps spanning several repositories.
+- Export to Mermaid or Graphviz.
+- Per-node history (how often a method changes).
