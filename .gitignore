@@ -11,9 +11,8 @@ out/
 *.iws
 .vscode/
 
-# Claude Code config — currently copied from another project (Kairos) and not
-# yet adapted to Codemap. Kept local until it is rewritten for this repo.
-.claude/
+# Local Claude Code overrides (personal, not shared)
+.claude/settings.local.json
 
 # Codemap output (build artifacts — regenerate with a run)
 codemap/index.json
