@@ -39,6 +39,7 @@ public final class CodeIndex {
     private final List<IndexedMethod> methods;
     private final Map<String, FileFingerprint> files;
     private final IndexStatistics statistics;
+    private final CallGraph callGraph;
 
     private final Map<String, IndexedClass> classesById;
     private final Map<String, List<IndexedMethod>> methodsByClassId;
@@ -52,6 +53,7 @@ public final class CodeIndex {
         this.methods = List.copyOf(builder.methods);
         this.files = Collections.unmodifiableMap(new LinkedHashMap<>(builder.files));
         this.statistics = builder.statistics;
+        this.callGraph = new CallGraph(builder.calls);
 
         this.classesById = classes.stream()
                 .collect(Collectors.toUnmodifiableMap(IndexedClass::id, Function.identity()));
@@ -99,6 +101,16 @@ public final class CodeIndex {
         return statistics;
     }
 
+    /** Every call, type-use, and implementation edge, with reverse lookups. */
+    public CallGraph callGraph() {
+        return callGraph;
+    }
+
+    /** Raw edge list, for serialisation. Prefer {@link #callGraph()} for lookups. */
+    public List<CallEdge> calls() {
+        return callGraph.edges();
+    }
+
     /**
      * Looks up a type by id.
      *
@@ -137,6 +149,7 @@ public final class CodeIndex {
         private List<IndexedMethod> methods = List.of();
         private Map<String, FileFingerprint> files = Map.of();
         private IndexStatistics statistics = IndexStatistics.empty();
+        private List<CallEdge> calls = List.of();
 
         private Builder() {
         }
@@ -178,6 +191,11 @@ public final class CodeIndex {
 
         public Builder statistics(IndexStatistics value) {
             this.statistics = Objects.requireNonNull(value, "statistics");
+            return this;
+        }
+
+        public Builder calls(List<CallEdge> value) {
+            this.calls = Objects.requireNonNull(value, "calls");
             return this;
         }
 

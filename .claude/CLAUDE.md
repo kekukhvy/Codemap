@@ -35,7 +35,7 @@ These were settled deliberately. Don't quietly design around them.
    processes; one merged root would depict a monolith that doesn't exist.
    Cross-module calls draw connectors (§3.2.2).
 3. **Test sources are never indexed** — not parsed, not shown, not filterable
-   back in (§3.5). They're unreachable from entry points and invert call
+   back in (§3.6). They're unreachable from entry points and invert call
    direction. This also removes the port fan-out problem.
 4. **Change highlighting is an overlay**, not the organising principle. The map
    must be worth opening with no diff at all.
@@ -105,7 +105,7 @@ java -jar build/libs/codemap.jar --root <path> --base main
 ./gradlew run --args="--root <path> --base main"
 ```
 
-**Verification project:** `../kairos` — 277 production Java files, 10 Gradle
+**Verification project:** `../kairos` — 169 production Java files, 10 Gradle
 modules, 941 `@Test` methods. It exercises every detection style at once:
 programmatic Javalin routes (`kairos-api`), Vaadin `@Route` (`kairos-admin`),
 `main()` in both, and real cross-module dependencies on `common`. Verify

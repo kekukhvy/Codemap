@@ -50,7 +50,7 @@ reviewing a PR, or reorienting before a change.
 ### Out
 
 - **Test sources.** `src/test/java` and equivalents are not indexed at all — not
-  parsed, not shown, not counted. See §3.5.
+  parsed, not shown, not counted. See §3.6.
 - **Languages other than Java.** Not Kotlin, not polyglot repos.
 - **Runtime tracing.** Codemap never executes or instruments the analysed
   project. Everything is derived from source and git.
@@ -141,10 +141,10 @@ Connectors are `CROSS_MODULE` edges carrying the source and target module ids.
 | Edge | Rendering | Meaning |
 |---|---|---|
 | `CALL_INTERNAL` | Dashed `╌╌` | Call to a method of the same class |
-| `CALL_EXTERNAL` | Solid `──→` | Call crossing into another class |
-| `CROSS_MODULE` | Heavy, collapsed | Call or reference crossing a module boundary |
-| `USES_TYPE` | Thin | A type used in a signature |
-| `IMPLEMENTS` | Hollow | Interface → implementation |
+| `CALL_EXTERNAL` | Solid `──→` | Call crossing into another class, same module |
+| `CROSS_MODULE` | Heavy, collapsed | Call or reference crossing a module boundary; carries `fromModuleId`/`toModuleId` |
+| `USES_TYPE` | Thin | A type used in a signature; does not continue a call chain |
+| `IMPLEMENTS` | Hollow | Interface implemented by a class |
 
 The internal/external distinction is deliberate. A call within a class is a
 local detail and should not pull the reader's eye out of the current card; a call
@@ -154,6 +154,30 @@ arrow to a named collaborator.
 **`USES_TYPE` does not continue a chain.** A type is not an invocation. Selecting
 a type shows where it is used and what methods it declares, but chains do not
 propagate *through* it. Conflating the two would imply calls that do not exist.
+
+### 3.3.1 Third-party call filtering
+
+Library calls are kept out of the graph through two mechanisms:
+
+1. **Symbol resolution via dependencies.** A `DependencyClasspath` discovers the
+   project's compiled dependencies from the local Gradle/Maven cache
+   (no build step). These jars are fed to JavaParser's symbol solver alongside
+   the project's own source roots. When a call to a library method resolves
+   successfully, it is recognised as external to the indexed project and is
+   dropped by the same filter that excludes JDK calls.
+
+2. **Receiver-based degradation.** Symbol resolution failures are expected in real
+   projects. An unresolvable call is kept as a degraded edge (`resolved: false`)
+   **only when it has no receiver** — e.g., `validate()` rather than
+   `grid.validate()` — because a no-receiver call targets the enclosing type or
+   something it inherits (worth a reader following up). A call through an
+   unidentifiable receiver — e.g., `logger.info()` when the logger's type is
+   unknown — is almost always a library call and is dropped to avoid inflating the
+   map with bare method names that can never join to indexed methods.
+
+**Result on the reference project:** the kairos codebase (169 production files)
+initially produced 3325 edges with 2049 unresolved; after applying these filters
+this dropped to 1569 edges with 241 unresolved, losing no in-project calls.
 
 ### 3.4 Layers
 
@@ -166,7 +190,18 @@ architectural violations visible: a `DOMAIN` node with a solid edge into
 `INFRASTRUCTURE` is a dependency pointing the wrong way, and the map shows it
 without any dedicated rule.
 
-### 3.5 Test sources are excluded entirely
+### 3.5 Module dependency aggregation
+
+Module dependencies (§3.2.2) are exposed as `CallGraph.moduleDependencies()`,
+computed in-memory by rolling up every `CROSS_MODULE` edge into a set of
+module-to-module relationships. This derives the "which module depends on which"
+overview.
+
+**Module dependencies are not persisted as a separate array in `index.json`.** They
+are fully reconstructible from the `CROSS_MODULE` edges, and a duplicated field
+could drift; the edges are the single source of truth.
+
+### 3.6 Test sources are excluded entirely
 
 Test sources are **not indexed** — not parsed, not stored, not rendered, and not
 filterable back in.
@@ -175,7 +210,7 @@ The map answers "what does this application do in production". Tests are not par
 of that: they are not reachable from any entry point, they invert the call
 direction (a test calls production code, so every method gains callers that never
 run in production), and in a well-tested project they outnumber production code —
-in the reference project, 941 `@Test` methods against 277 source files.
+in the reference project, 941 `@Test` methods against 169 production files.
 
 This also **dissolves the interface fan-out problem**. A port like
 `TaskRepository` has a real implementation and an in-memory test double; indexing
@@ -408,7 +443,7 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
                   "layer","file","lineStart","lineEnd","javadoc","status" } ],
   "methods":  [ { "id","classId","name","signature","file","lineStart",
                   "lineEnd","javadoc","source","constructor","status" } ],
-  "calls":    [ { "from","to","kind","resolved","line" } ],
+  "calls":    [ { "from","to","kind","resolved","line","fromModuleId","toModuleId" } ],
   "entryPoints": [ { "id","moduleId","kind","label","methodId",
                      "detectedBy","source" } ],
   "files":    { "<path>": { "hash","size","modifiedAtMillis" } },
@@ -416,6 +451,14 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
                   "methodsIndexed","skipped": [ { "file","reason" } ] }
 }
 ```
+
+Each edge in the `calls` array carries:
+- `from`: source method id (e.g., `com.example.Task#update(TaskEdit, Instant)`)
+- `to`: target method id or bare name if unresolved
+- `kind`: one of `CALL_INTERNAL`, `CALL_EXTERNAL`, `CROSS_MODULE`, `USES_TYPE`, `IMPLEMENTS`
+- `resolved`: `true` if the symbol solver confirmed the target; `false` if degraded to a name match
+- `line`: call-site line number, 1-based; 0 for type references (which have no single site)
+- `fromModuleId`, `toModuleId`: set only for `CROSS_MODULE` edges, omitted otherwise
 
 `statistics.skipped` is what makes a degraded run honest: a file Codemap could
 not parse is named there and reported on the console, rather than silently
@@ -478,7 +521,7 @@ done.
 
 ### Verification project
 
-Correctness is verified against **Kairos** (`../kairos`, 277 production Java
+Correctness is verified against **Kairos** (`../kairos`, 169 production Java
 files across 10 Gradle modules), which exercises every detection style in one
 codebase:
 
@@ -492,7 +535,7 @@ codebase:
 
 It is also a genuine hexagonal codebase, so layer assignment and port/adapter
 structure can be judged against real architecture — and it has 941 `@Test`
-methods, which makes it a real test of the exclusion rule in §3.5.
+methods, which makes it a real test of the exclusion rule in §3.6.
 
 ---
 
@@ -500,14 +543,23 @@ methods, which makes it a real test of the exclusion rule in §3.5.
 
 - **Java only.**
 - **Interface dispatch still fans out when a port has several production
-  implementations.** Excluding test sources (§3.5) removes the common case — the
+  implementations.** Excluding test sources (§3.6) removes the common case — the
   in-memory test double — but a port with two real adapters (e.g. Kafka and
   webhook delivery) legitimately reaches both, and static analysis cannot say
   which is wired at runtime. Both are shown.
+- **Framework registration breaks call chains.** Methods reached only through
+  framework reflection (HTTP route registration, Vaadin `@Route` instantiation,
+  dependency injection by name) have no incoming call edge, because static
+  analysis cannot see the registration code. These are entry points (detected in
+  §4), but if one is called from production code *without* going through the
+  framework's entry point, that edge is invisible. On the reference project
+  (kairos, 797 methods) this affects 227 methods in this position. Workaround: such
+  methods are flagged as `ENTRY_POINT`, which explains their apparent lack of
+  callers.
 - **Reflection, DI-by-name, and dynamic proxies are invisible.** Chains passing
   through them break; nothing in static analysis can recover them.
 - **Test-only classes appear as orphans**, since nothing in production calls them
-  (§3.5). This is accurate rather than a defect, but it can surprise.
+  (§3.6). This is accurate rather than a defect, but it can surprise.
 - **`removed` nodes have no body** (see §5).
 - **Generated sources** (JOOQ, MapStruct) inflate the map. Excluded by default
   via a `build/generated` path filter, overridable in config.

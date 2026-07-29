@@ -136,6 +136,48 @@ class JavaSourceParserTest {
     }
 
     @Nested
+    @DisplayName("records")
+    class Records {
+
+        @Test
+        @DisplayName("indexes the canonical constructor a record never declares")
+        void indexesCanonicalConstructor() throws IOException {
+            ParsedFile record = parse("Pagination.java", """
+                    package com.example;
+
+                    public record Pagination(int limit, int offset) {
+                    }
+                    """);
+
+            assertThat(record.methods())
+                    .as("`new Pagination(10, 0)` is a real call and needs a target to join to")
+                    .extracting(IndexedMethod::id)
+                    .contains("com.example.Pagination#Pagination(int, int)");
+        }
+
+        @Test
+        @DisplayName("does not duplicate a canonical constructor the record declares itself")
+        void doesNotDuplicateExplicitConstructor() throws IOException {
+            ParsedFile record = parse("Bounded.java", """
+                    package com.example;
+
+                    public record Bounded(int limit) {
+                        public Bounded {
+                            if (limit < 0) {
+                                throw new IllegalArgumentException();
+                            }
+                        }
+                    }
+                    """);
+
+            assertThat(record.methods())
+                    .extracting(IndexedMethod::id)
+                    .filteredOn(id -> id.contains("#Bounded("))
+                    .hasSize(1);
+        }
+    }
+
+    @Nested
     @DisplayName("javadoc")
     class Javadoc {
 

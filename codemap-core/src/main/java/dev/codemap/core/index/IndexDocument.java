@@ -2,6 +2,7 @@ package dev.codemap.core.index;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CodeIndex;
 import dev.codemap.core.model.FileFingerprint;
 import dev.codemap.core.model.IndexStatistics;
@@ -27,6 +28,7 @@ import java.util.Map;
  * @param modules build modules, each a root of the map
  * @param classes indexed types
  * @param methods indexed methods and constructors
+ * @param calls call, type-use, and implementation edges between methods
  * @param files fingerprint per source file, keyed by relative path
  * @param statistics counts and skipped files from the run
  */
@@ -37,6 +39,7 @@ record IndexDocument(
         @JsonProperty("modules") List<IndexedModule> modules,
         @JsonProperty("classes") List<IndexedClass> classes,
         @JsonProperty("methods") List<IndexedMethod> methods,
+        @JsonProperty("calls") List<CallEdge> calls,
         @JsonProperty("files") Map<String, FileFingerprint> files,
         @JsonProperty("statistics") IndexStatistics statistics) {
 
@@ -45,6 +48,7 @@ record IndexDocument(
         modules = modules == null ? List.of() : modules;
         classes = classes == null ? List.of() : classes;
         methods = methods == null ? List.of() : methods;
+        calls = calls == null ? List.of() : calls;
         files = files == null ? Map.of() : files;
         statistics = statistics == null ? IndexStatistics.empty() : statistics;
     }
@@ -57,6 +61,7 @@ record IndexDocument(
                 index.modules(),
                 index.classes(),
                 index.methods(),
+                index.calls(),
                 index.files(),
                 index.statistics());
     }
@@ -69,6 +74,7 @@ record IndexDocument(
                 .modules(modules)
                 .classes(classes)
                 .methods(methods)
+                .calls(calls)
                 .files(files)
                 .statistics(statistics)
                 .build();

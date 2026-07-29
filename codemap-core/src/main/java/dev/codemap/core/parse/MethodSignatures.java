@@ -21,9 +21,17 @@ final class MethodSignatures {
     private static final String VARARGS = "...";
     private static final String RETURN_SEPARATOR = " : ";
 
-    /** A dotted package qualifier preceding a type name, e.g. the {@code java.util.} in {@code java.util.List}. */
+    /**
+     * Everything preceding a type's own name: the package, and any enclosing type.
+     *
+     * <p>Both are stripped, so {@code java.util.List} and
+     * {@code Destination.Builder} reduce to {@code List} and {@code Builder}. The
+     * enclosing type matters because the symbol solver spells a nested type in
+     * full while the declaration site writes it plainly — leaving the difference
+     * in place makes every call to such a constructor dangle.
+     */
     private static final java.util.regex.Pattern QUALIFIED_NAME =
-            java.util.regex.Pattern.compile("\\b(?:[a-z][a-zA-Z0-9_]*\\.)+(?=[A-Z])");
+            java.util.regex.Pattern.compile("\\b(?:[A-Za-z_][a-zA-Z0-9_]*\\.)+(?=[A-Z])");
 
     /**
      * Renders a signature for display, e.g. {@code create(CreateTaskCommand) : Task}.
@@ -60,16 +68,39 @@ final class MethodSignatures {
      * @return a stable identifier
      */
     String methodId(String classId, CallableDeclaration<?> callable) {
+        // Rendered exactly as the display signature is, varargs included: an id
+        // that dropped the ellipsis would not match the one the symbol solver
+        // builds for the same declaration, and every call to that method would
+        // dangle.
         String parameterTypes = callable.getParameters().stream()
-                .map(parameter -> simpleTypeName(parameter.getType().asString()))
+                .map(this::renderParameter)
                 .collect(Collectors.joining(PARAMETER_SEPARATOR));
 
         return classId + ID_SEPARATOR + callable.getNameAsString() + "(" + parameterTypes + ")";
     }
 
+    /** Renders one parameter's type as it appears in an id, for callers outside this class. */
+    String simpleParameterType(Parameter parameter) {
+        return renderParameter(parameter);
+    }
+
     private String renderParameter(Parameter parameter) {
         String type = simpleTypeName(parameter.getType().asString());
         return parameter.isVarArgs() ? type + VARARGS : type;
+    }
+
+    /**
+     * Removes the spaces a type solver inserts after commas in generic arguments.
+     *
+     * <p>{@code Function<A, B>} becomes {@code Function<A,B>}, matching how
+     * JavaParser renders the same type at the declaration site. Without this the
+     * two spellings produce different ids and an edge silently fails to join.
+     *
+     * @param type type as described by the solver
+     * @return the type with generic argument spacing normalised
+     */
+    static String compactGenericArguments(String type) {
+        return type.replace(", ", ",");
     }
 
     /**
@@ -81,10 +112,14 @@ final class MethodSignatures {
      * method reads the same way wherever it appears, and two overloads cannot look
      * different purely because their authors wrote imports differently.
      *
+     * <p>Package-visible so {@link ResolvedMethodIds} can normalise symbol-solver
+     * type descriptions the same way, keeping resolved call targets addressable by
+     * the ids this class produces.
+     *
      * @param type type as written in the source
      * @return the type with every package qualifier removed
      */
-    private static String simpleTypeName(String type) {
+    static String simpleTypeName(String type) {
         return QUALIFIED_NAME.matcher(type).replaceAll("");
     }
 }
