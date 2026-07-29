@@ -400,20 +400,30 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
 ```jsonc
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-28T21:00:00Z",
+  "generatedAt": "2026-07-29T21:00:00Z",
   "root": "/path/to/project",
   "comparison": { "mode": "BRANCH", "base": "main", "mergeBase": "83eb2f8" },
-  "files":   { "<path>": { "hash": "…", "mtime": 0, "size": 0 } },
-  "modules": [ { "id","name","path","sourceRoots" } ],
-  "classes": [ { "id","moduleId","fqn","simpleName","kind","layer","file",
-                 "lineStart","lineEnd","javadoc","status" } ],
-  "methods": [ { "id","classId","name","signature","file",
-                 "lineStart","lineEnd","javadoc","source","status" } ],
-  "calls":   [ { "from","to","kind","resolved","line" } ],
+  "modules":  [ { "id","name","path","sourceRoots" } ],
+  "classes":  [ { "id","moduleId","fqn","simpleName","packageName","kind",
+                  "layer","file","lineStart","lineEnd","javadoc","status" } ],
+  "methods":  [ { "id","classId","name","signature","file","lineStart",
+                  "lineEnd","javadoc","source","constructor","status" } ],
+  "calls":    [ { "from","to","kind","resolved","line" } ],
   "entryPoints": [ { "id","moduleId","kind","label","methodId",
-                     "detectedBy","source" } ]
+                     "detectedBy","source" } ],
+  "files":    { "<path>": { "hash","size","modifiedAtMillis" } },
+  "statistics": { "filesScanned","filesParsed","classesIndexed",
+                  "methodsIndexed","skipped": [ { "file","reason" } ] }
 }
 ```
+
+`statistics.skipped` is what makes a degraded run honest: a file Codemap could
+not parse is named there and reported on the console, rather than silently
+missing from the map.
+
+Method `id` includes parameter types (`com.example.Task#update(TaskEdit, Instant)`)
+so overloads stay distinct. The return type is excluded deliberately — Java does
+not overload on it, and including it would churn ids when a return type widens.
 
 The index doubles as the incremental cache: `files` carries hash, mtime, and size
 so a rerun reparses only what changed.
