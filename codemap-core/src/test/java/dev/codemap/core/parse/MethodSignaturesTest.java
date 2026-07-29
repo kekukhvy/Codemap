@@ -77,6 +77,34 @@ class MethodSignaturesTest {
     }
 
     @Nested
+    @DisplayName("fully-qualified type names")
+    class QualifiedTypeNames {
+
+        @Test
+        @DisplayName("strips a fully-qualified parameter type down to its simple name")
+        void stripsQualifiedParameterType() throws IOException {
+            IndexedMethod method = parseSingleMethod(
+                    "public void store(java.util.List<java.lang.String> items) {}");
+
+            assertThat(method.signature()).isEqualTo("store(List<String>) : void");
+            assertThat(method.id()).isEqualTo(CLASS_ID + "#store(List<String>)");
+        }
+
+        @Test
+        @DisplayName("treats a fully-qualified overload as identical to its imported counterpart")
+        void unifiesQualifiedAndImportedOverload() throws IOException {
+            List<IndexedMethod> methods = parseMethods(
+                    "public void store(List<String> items) {}",
+                    "public void storeOther(java.util.List<String> items) {}");
+
+            assertThat(methods).extracting(IndexedMethod::signature)
+                    .containsExactlyInAnyOrder(
+                            "store(List<String>) : void",
+                            "storeOther(List<String>) : void");
+        }
+    }
+
+    @Nested
     @DisplayName("arrays")
     class Arrays {
 
