@@ -1,6 +1,7 @@
 package dev.codemap.core.graph;
 
 import dev.codemap.core.model.CallEdge;
+import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.EdgeKind;
 import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.parse.JavaSourceParser;
@@ -16,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -477,6 +479,89 @@ class CallGraphBuilderTest {
             assertThat(implementsEdges).hasSize(1);
             assertThat(implementsEdges).extracting(CallEdge::to)
                     .containsExactly("com.example.JooqTaskRepository");
+        }
+    }
+
+    @Nested
+    @DisplayName("id parity between the declaration site and the solver")
+    class IdParity {
+
+        /**
+         * The guard that would have caught the varargs defect. Two independent
+         * pieces of code build method ids — MethodSignatures from the declaration,
+         * ResolvedMethodIds from the solver — and any disagreement makes an edge
+         * point at a method that does not exist, silently.
+         */
+        @Test
+        @DisplayName("every resolved edge target is a method that was actually indexed")
+        void resolvedEdgesJoinToIndexedMethods() throws IOException {
+            writeClass("Fixtures", """
+                    package com.example;
+
+                    import java.util.List;
+                    import java.util.function.Function;
+
+                    public class Fixtures {
+                        public static <T> void withVarargs(String label, T... items) {}
+                        public static void withGenerics(Function<String, Integer> mapper) {}
+                        public static void withNestedGenerics(java.util.Map<String, List<Integer>> data) {}
+                        public static void withArray(int[] values) {}
+                    }
+                    """);
+            writeClass("Caller", """
+                    package com.example;
+
+                    import java.util.List;
+                    import java.util.Map;
+                    import java.util.function.Function;
+
+                    public class Caller {
+                        public void callThem() {
+                            Fixtures.withVarargs("a", "b", "c");
+                            Fixtures.withGenerics(String::length);
+                            Fixtures.withNestedGenerics(Map.of());
+                            Fixtures.withArray(new int[0]);
+                        }
+                    }
+                    """);
+
+            Set<String> indexedIds = parsedFiles.stream()
+                    .flatMap(file -> file.methods().stream())
+                    .map(IndexedMethod::id)
+                    .collect(java.util.stream.Collectors.toSet());
+
+            List<CallEdge> resolvedCalls = buildEdges().stream()
+                    .filter(CallEdge::resolved)
+                    .filter(edge -> edge.kind() == EdgeKind.CALL_INTERNAL
+                            || edge.kind() == EdgeKind.CALL_EXTERNAL
+                            || edge.kind() == EdgeKind.CROSS_MODULE)
+                    .toList();
+
+            assertThat(resolvedCalls).isNotEmpty();
+            assertThat(resolvedCalls)
+                    .as("an id built by the solver must match the one built at the declaration")
+                    .allSatisfy(edge -> assertThat(indexedIds).contains(edge.to()));
+        }
+
+        @Test
+        @DisplayName("a varargs method keeps its ellipsis on both sides")
+        void varargsRenderIdentically() throws IOException {
+            writeClass("Varargs", """
+                    package com.example;
+
+                    public class Varargs {
+                        public static <T> void accept(String label, T... items) {}
+
+                        public void use() {
+                            accept("x", 1, 2);
+                        }
+                    }
+                    """);
+
+            assertThat(buildEdges())
+                    .filteredOn(CallEdge::resolved)
+                    .extracting(CallEdge::to)
+                    .contains("com.example.Varargs#accept(String, T...)");
         }
     }
 
