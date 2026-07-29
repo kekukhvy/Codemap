@@ -1,0 +1,8 @@
+// The analysis core: model, parser, call graph, entry-point rules, diff.
+//
+// Depends on NO other module in this project — that boundary is asserted by
+// ModuleBoundaryTest and is what keeps the pipeline stages independently
+// testable.
+dependencies {
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+}

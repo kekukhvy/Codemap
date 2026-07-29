@@ -1,0 +1,42 @@
+plugins {
+    id 'application'
+    id 'com.gradleup.shadow'
+}
+
+// The CLI: argument parsing, config loading, and wiring the pipeline together.
+// This is the only module that knows about every other one.
+dependencies {
+    implementation project(':codemap-core')
+    implementation project(':codemap-render')
+    implementation project(':codemap-ai')
+
+    implementation "info.picocli:picocli:${picocliVersion}"
+    annotationProcessor "info.picocli:picocli-codegen:${picocliVersion}"
+
+    implementation "org.yaml:snakeyaml:${snakeyamlVersion}"
+    runtimeOnly "ch.qos.logback:logback-classic:${logbackVersion}"
+}
+
+application {
+    mainClass = 'dev.codemap.cli.CodemapCommand'
+}
+
+tasks.named('run') {
+    // Without this, `run` starts in codemap-cli/ and a relative --root resolves
+    // against the wrong directory. Users type paths relative to where they
+    // invoked Gradle, which is the repository root.
+    workingDir = rootProject.projectDir
+}
+
+shadowJar {
+    // Plain `codemap.jar` — the README tells users to run exactly this.
+    archiveBaseName = 'codemap'
+    archiveClassifier = ''
+    archiveVersion = ''
+    mergeServiceFiles()
+}
+
+// `./gradlew build` should produce the runnable artifact, not just the thin jar.
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+}

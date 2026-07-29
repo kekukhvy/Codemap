@@ -318,8 +318,27 @@ opening with no diff at all.
 without appearing in the diff. It is deliberately **one hop only** — two hops
 marks most of the codebase and stops meaning anything.
 
-Sources: `git diff --unified=0 <base>` for the working tree, or `--since` for a
-commit range. Line ranges are mapped onto method ranges from the index.
+### 5.1 What "changed" is measured against
+
+The default answers **"what is in my pull request"**, because that is the question
+being asked when the map is opened during review.
+
+| Mode | Selected by | Git equivalent |
+|---|---|---|
+| `BRANCH` (default) | nothing, or `--base <branch>` | `git diff --unified=0 <base>...HEAD` plus uncommitted work |
+| `REVISION` | `--since <commit>` | `git diff --unified=0 <commit>` |
+
+`BRANCH` mode uses the **merge base** — the point this branch diverged from the
+base branch — not a direct two-dot comparison. The difference matters as soon as
+the base branch moves: a two-dot diff would colour commits other people landed
+after this branch forked as though they were part of it.
+
+The base branch is **auto-detected** from `origin/HEAD`, so the common case needs
+no flag. `--base` overrides it; if detection fails and no `--base` was given, the
+diff stage reports that it could not resolve a base rather than guessing.
+
+Line ranges from the resulting hunks are mapped onto the method ranges in the
+index.
 
 `removed` methods are recovered from diff hunks rather than by parsing the base
 revision, so they have no body to display. Parsing the base tree would double
@@ -383,7 +402,7 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
   "schemaVersion": 1,
   "generatedAt": "2026-07-28T21:00:00Z",
   "root": "/path/to/project",
-  "base": "main",
+  "comparison": { "mode": "BRANCH", "base": "main", "mergeBase": "83eb2f8" },
   "files":   { "<path>": { "hash": "…", "mtime": 0, "size": 0 } },
   "modules": [ { "id","name","path","sourceRoots" } ],
   "classes": [ { "id","moduleId","fqn","simpleName","kind","layer","file",

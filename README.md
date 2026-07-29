@@ -12,8 +12,21 @@ methods touched by recent git changes are outlined in colour on top of that.
 
 ## Status
 
-Not implemented yet. This README and [`doc/specification.md`](doc/specification.md)
-are the specification the implementation follows.
+**In development.** The build and CLI exist: the tool runs, validates its
+arguments, and reports the configuration it resolved. **No analysis happens
+yet** — running it prints the resolved settings and says so.
+
+Progress is tracked as milestones M1–M8; see the
+[issues](https://github.com/kekukhvy/Codemap/issues).
+
+| | Milestone | State |
+|---|---|---|
+| M1 | Project skeleton — modules, CLI, fat JAR | ✅ done |
+| M2 | Index the code | ⏳ next |
+| M3–M8 | Call graph → report → incremental → config/AI | planned |
+
+The rest of this document describes the tool as specified; see
+[`doc/specification.md`](doc/specification.md) for the design rationale.
 
 ---
 
@@ -76,27 +89,49 @@ files and git metadata only.
 ## Usage
 
 ```bash
-# Build the tool
+# Build the tool (produces codemap-cli/build/libs/codemap.jar)
 ./gradlew build
 
-# Map a project, marking changes relative to main
-java -jar build/libs/codemap.jar --root /path/to/project --base main
+# Map the current project, highlighting this branch's changes
+java -jar codemap-cli/build/libs/codemap.jar
+
+# Map another project
+java -jar codemap-cli/build/libs/codemap.jar --root /path/to/project
 
 # Or through Gradle
-./gradlew run --args="--root /path/to/project --base main"
+./gradlew :codemap-cli:run --args="--root /path/to/project"
 ```
+
+Every option has a working default, so a bare run maps the current directory.
+Use `--help` to see the flags.
 
 ### Options
 
 | Flag | Meaning | Default |
 |---|---|---|
 | `--root <path>` | Java project to analyse | current directory |
-| `--base <ref>` | Branch/commit to diff the working tree against | `HEAD` |
-| `--since <commit>` | Diff a commit range instead of the working tree | — |
+| `--base <branch>` | Branch to compare against | the repository's default branch |
+| `--since <commit>` | Compare against this exact commit instead of the branch point | — |
 | `--out <path>` | Where to write the report | `codemap/report.html` |
 | `--config <path>` | Custom entry-point rules | `codemap.yml` if present |
 | `--ai` | Let an AI agent classify unresolved entry points | off |
 | `--rebuild` | Ignore the cached index and reparse everything | off |
+
+### What "changed" means
+
+By default the map highlights **everything this branch changed since it diverged
+from the default branch** — the same set of changes a pull request shows. So
+during review, a bare `codemap` already highlights the right thing.
+
+That uses the merge base, not a direct comparison against the tip. The difference
+shows up as soon as the base branch moves: comparing against the tip would colour
+commits other people landed after you branched as though they were yours.
+
+```bash
+codemap                     # this branch's changes (what your PR contains)
+codemap --base develop      # compare against a different branch
+codemap --since HEAD~5      # compare against an exact commit instead
+```
 
 Output lands in `codemap/`: `index.json` (the index, and the incremental cache)
 and `report.html` (the map). Both are build artifacts — git-ignore them.

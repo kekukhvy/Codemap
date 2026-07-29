@@ -1,0 +1,4 @@
+// Rendering: index.json -> a self-contained report.html.
+dependencies {
+    implementation project(':codemap-core')
+}
