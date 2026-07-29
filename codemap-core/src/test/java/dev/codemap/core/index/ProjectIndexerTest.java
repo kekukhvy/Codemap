@@ -147,6 +147,63 @@ class ProjectIndexerTest {
     }
 
     @Nested
+    @DisplayName("entry points across modules")
+    class EntryPointsPerModule {
+
+        @Test
+        @DisplayName("attributes each entry point to the module that declares it")
+        void separatesEntryPointsByModule() throws IOException {
+            Files.writeString(projectRoot.resolve("settings.gradle"), "include 'api'\ninclude 'admin'\ninclude 'shared'\n");
+            writeClassIn("api", "ApiApplication", """
+                    public class ApiApplication {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+            writeClassIn("admin", "AdminApplication", """
+                    public class AdminApplication {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+            writeClassIn("shared", "Util", """
+                    public class Util {
+                        public static void help() {
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.entryPointsOf("api")).singleElement()
+                    .satisfies(entryPoint -> assertThat(entryPoint.moduleId()).isEqualTo("api"));
+            assertThat(index.entryPointsOf("admin")).hasSize(1);
+            assertThat(index.entryPointsOf("shared"))
+                    .as("a library module reached by nothing external has no entry point, which is normal")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("indexes a project where most modules have no entry point at all")
+        void toleratesModulesWithoutEntryPoints() throws IOException {
+            Files.writeString(projectRoot.resolve("settings.gradle"), "include 'app'\ninclude 'lib-a'\ninclude 'lib-b'\n");
+            writeClassIn("app", "App", """
+                    public class App {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+            writeClassIn("lib-a", "A", "public class A {}");
+            writeClassIn("lib-b", "B", "public class B {}");
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.modules()).hasSize(3);
+            assertThat(index.entryPoints()).hasSize(1);
+        }
+    }
+
+    @Nested
     @DisplayName("multi-module projects")
     class MultiModule {
 

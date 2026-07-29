@@ -145,6 +145,22 @@ public final class CodeIndex {
                 .toList();
     }
 
+    /**
+     * Entry points belonging to one module, in detection order.
+     *
+     * <p>Modules are the roots of the map and their entry points hang beneath
+     * them, so the renderer asks per module rather than filtering a flat list.
+     *
+     * @param moduleId identifier from {@link IndexedModule#id()}
+     * @return that module's entry points, empty when it has none — normal for a
+     *         library module that nothing external reaches
+     */
+    public List<EntryPoint> entryPointsOf(String moduleId) {
+        return entryPoints.stream()
+                .filter(entryPoint -> entryPoint.moduleId().equals(moduleId))
+                .toList();
+    }
+
     /** Builds a {@link CodeIndex}. */
     public static final class Builder {
 
