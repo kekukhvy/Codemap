@@ -1,6 +1,7 @@
 package dev.codemap.cli;
 
 import dev.codemap.core.CodemapOptions;
+import dev.codemap.core.ComparisonMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -43,14 +44,14 @@ class CodemapCommandTest {
         }
 
         @Test
-        @DisplayName("no arguments prints usage and succeeds, rather than failing")
-        void noArgumentsPrintsUsage() {
+        @DisplayName("no arguments maps the current directory instead of printing usage")
+        void noArgumentsMapsCurrentDirectory() {
             int exitCode = run();
 
             assertThat(exitCode).isEqualTo(ExitCode.SUCCESS);
-            assertThat(out.toString()).contains("Usage:", "codemap");
-            assertThat(err.toString()).isEmpty();
-            assertThat(runner.wasInvoked()).isFalse();
+            assertThat(runner.wasInvoked()).as("a bare run should analyse, not just explain").isTrue();
+            assertThat(runner.options().root())
+                    .isEqualTo(Path.of(".").toAbsolutePath().normalize());
         }
 
         @Test
@@ -111,6 +112,15 @@ class CodemapCommandTest {
         }
 
         @Test
+        @DisplayName("defaults to this branch's changes, which is what a pull request shows")
+        void defaultsToBranchComparison(@TempDir Path projectRoot) {
+            run("--root", projectRoot.toString());
+
+            assertThat(runner.options().comparisonMode()).isEqualTo(ComparisonMode.BRANCH);
+            assertThat(runner.options().base()).isEmpty();
+        }
+
+        @Test
         @DisplayName("carries every flag into the options")
         void carriesEveryFlag(@TempDir Path projectRoot) {
             int exitCode = run(
@@ -125,8 +135,9 @@ class CodemapCommandTest {
             assertThat(exitCode).isEqualTo(ExitCode.SUCCESS);
 
             CodemapOptions options = runner.options();
-            assertThat(options.base()).isEqualTo("main");
+            assertThat(options.base()).contains("main");
             assertThat(options.since()).contains("HEAD~3");
+            assertThat(options.comparisonMode()).isEqualTo(ComparisonMode.REVISION);
             // Compared as a string: the report does not exist yet, and AssertJ's
             // Path#endsWith resolves the real file on disk.
             assertThat(options.output().toString()).endsWith("target/map.html");
@@ -141,7 +152,7 @@ class CodemapCommandTest {
             int exitCode = run("-r", projectRoot.toString(), "-b", "develop");
 
             assertThat(exitCode).isEqualTo(ExitCode.SUCCESS);
-            assertThat(runner.options().base()).isEqualTo("develop");
+            assertThat(runner.options().base()).contains("develop");
         }
 
         @Test

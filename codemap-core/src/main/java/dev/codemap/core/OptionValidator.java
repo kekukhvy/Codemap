@@ -16,7 +16,6 @@ final class OptionValidator {
     private static final String ROOT_NOT_FOUND = "Project directory does not exist: %s";
     private static final String ROOT_NOT_A_DIRECTORY = "Project root is not a directory: %s";
     private static final String ROOT_NOT_READABLE = "Project directory is not readable: %s";
-    private static final String BLANK_REVISION = "Revision must not be blank. Pass a branch, tag, or commit.";
     private static final String UNRESOLVABLE_PATH = "Path cannot be resolved: %s";
 
     private OptionValidator() {
@@ -44,25 +43,6 @@ final class OptionValidator {
             throw new InvalidOptionsException(ROOT_NOT_READABLE.formatted(absolute));
         }
         return absolute;
-    }
-
-    /**
-     * Falls back to a default when no revision was named, and rejects blanks.
-     *
-     * @param revision the requested revision, possibly {@code null}
-     * @param fallback value to use when none was requested
-     * @return a non-blank revision
-     * @throws InvalidOptionsException if a revision was given but is blank
-     */
-    static String requireRevision(String revision, String fallback) {
-        if (revision == null) {
-            return fallback;
-        }
-        String trimmed = revision.trim();
-        if (trimmed.isEmpty()) {
-            throw new InvalidOptionsException(BLANK_REVISION);
-        }
-        return trimmed;
     }
 
     /**

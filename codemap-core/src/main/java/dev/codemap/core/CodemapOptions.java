@@ -25,8 +25,14 @@ public final class CodemapOptions {
     /** Default index file name inside {@link #OUTPUT_DIRECTORY}. */
     public static final String DEFAULT_INDEX_NAME = "index.json";
 
-    /** Git revision used when the caller names none. */
-    public static final String DEFAULT_BASE_REVISION = "HEAD";
+    /**
+     * Fallback base branch when the repository's default branch cannot be read.
+     *
+     * <p>Only reached when {@code origin/HEAD} is unset and no common branch name
+     * exists — in that case the diff stage reports that it could not resolve a
+     * base rather than guessing wrongly.
+     */
+    public static final String FALLBACK_BASE_BRANCH = "main";
 
     /** Config file looked up in the project root when {@code --config} is absent. */
     public static final String DEFAULT_CONFIG_NAME = "codemap.yml";
@@ -58,19 +64,36 @@ public final class CodemapOptions {
         return root;
     }
 
-    /** Git revision the working tree is compared against. Never {@code null}. */
-    public String base() {
-        return base;
+    /**
+     * Branch this one is compared against, when the caller named one.
+     *
+     * <p>Empty means "work it out": the diff stage resolves the repository's
+     * default branch, so the common case needs no flag.
+     *
+     * @return the base branch, or empty to auto-detect
+     */
+    public Optional<String> base() {
+        return Optional.ofNullable(base);
     }
 
     /**
-     * Commit to diff a range from, when the caller wants a range rather than the
-     * working tree.
+     * Commit to diff from, when the caller wants an explicit revision rather than
+     * the branch point.
      *
-     * @return the commit, or empty when the working tree should be used
+     * @return the commit, or empty when the branch point should be used
      */
     public Optional<String> since() {
         return Optional.ofNullable(since);
+    }
+
+    /**
+     * Whether changes are measured from the branch point or from one revision.
+     *
+     * <p>Derived rather than set: naming a {@code --since} commit is what selects
+     * {@link ComparisonMode#REVISION}.
+     */
+    public ComparisonMode comparisonMode() {
+        return since == null ? ComparisonMode.BRANCH : ComparisonMode.REVISION;
     }
 
     /** Absolute path the report is written to. */
@@ -112,7 +135,7 @@ public final class CodemapOptions {
     public static final class Builder {
 
         private Path root;
-        private String base = DEFAULT_BASE_REVISION;
+        private String base;
         private String since;
         private Path output;
         private Path config;
@@ -164,12 +187,12 @@ public final class CodemapOptions {
          * the working directory the tool happened to be launched from.
          *
          * @return validated options
-         * @throws InvalidOptionsException if the root is missing, is not a
-         *         directory, or if the requested revisions are contradictory
+         * @throws InvalidOptionsException if the root is missing or is not a
+         *         readable directory
          */
         public CodemapOptions build() {
             this.root = OptionValidator.requireReadableDirectory(root);
-            this.base = OptionValidator.requireRevision(base, DEFAULT_BASE_REVISION);
+            this.base = OptionValidator.normaliseOptionalRevision(base);
             this.since = OptionValidator.normaliseOptionalRevision(since);
             this.output = OptionValidator.resolveOutput(output, root);
             this.config = OptionValidator.resolveConfig(config, root);
@@ -188,7 +211,7 @@ public final class CodemapOptions {
         return aiEnabled == that.aiEnabled
                 && rebuild == that.rebuild
                 && root.equals(that.root)
-                && base.equals(that.base)
+                && Objects.equals(base, that.base)
                 && Objects.equals(since, that.since)
                 && output.equals(that.output)
                 && Objects.equals(config, that.config);

@@ -30,13 +30,20 @@ import java.util.concurrent.Callable;
                 HTML map: modules, entry points, classes, methods, and the call \
                 chains between them, with git changes highlighted on top.
 
+                Run with no arguments to map the current directory. By default \
+                changes are measured from the point this branch diverged from the \
+                repository's default branch — the same set of changes a pull \
+                request shows.
+
                 The analysed project is never built or executed.""",
         footer = """
 
                 Examples:
-                  codemap --root . --base main
-                  codemap --root ../service --since HEAD~5
-                  codemap --root . --ai
+                  codemap                              map here, diff this branch's changes
+                  codemap --root ../service            map another project
+                  codemap --base develop               compare against a different branch
+                  codemap --since HEAD~5               compare against an exact commit
+                  codemap --ai                         classify unrecognised entry points
                 """
 )
 public final class CodemapCommand implements Callable<Integer> {
@@ -52,15 +59,15 @@ public final class CodemapCommand implements Callable<Integer> {
 
     @Option(
             names = {"-b", "--base"},
-            paramLabel = "<ref>",
-            description = "Branch or commit the working tree is compared against. Default: ${DEFAULT-VALUE}."
+            paramLabel = "<branch>",
+            description = "Branch to compare against. Default: the repository's default branch."
     )
-    private String base = CodemapOptions.DEFAULT_BASE_REVISION;
+    private String base;
 
     @Option(
             names = {"-s", "--since"},
             paramLabel = "<commit>",
-            description = "Diff a commit range from this commit instead of the working tree."
+            description = "Compare against this exact commit instead of the branch point."
     )
     private String since;
 
@@ -129,9 +136,9 @@ public final class CodemapCommand implements Callable<Integer> {
     /**
      * Runs the command and maps failures onto exit codes.
      *
-     * <p>Invoked with no arguments the tool prints usage and reports success:
-     * asking for help is not an error, and a bare {@code codemap} is how a user
-     * discovers the flags.
+     * <p>A bare {@code codemap} maps the current directory rather than printing
+     * usage: every option has a working default, so the no-argument case is the
+     * common one, not a mistake. {@code --help} remains the way to see the flags.
      *
      * @param args raw command-line arguments
      * @param commandLine configured picocli instance
@@ -140,11 +147,6 @@ public final class CodemapCommand implements Callable<Integer> {
     static int execute(String[] args, CommandLine commandLine) {
         commandLine.setExecutionExceptionHandler(CodemapCommand::handleExecutionException);
         commandLine.setParameterExceptionHandler(CodemapCommand::handleParameterException);
-
-        if (args.length == 0) {
-            commandLine.usage(commandLine.getOut());
-            return ExitCode.SUCCESS;
-        }
         return commandLine.execute(args);
     }
 

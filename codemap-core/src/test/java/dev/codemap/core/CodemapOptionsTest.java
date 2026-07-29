@@ -74,41 +74,55 @@ class CodemapOptionsTest {
     }
 
     @Nested
-    @DisplayName("revisions")
-    class Revisions {
+    @DisplayName("comparison")
+    class Comparison {
 
         @Test
-        @DisplayName("default to HEAD when no base is named")
-        void defaultsToHead(@TempDir Path projectRoot) {
+        @DisplayName("defaults to the branch point, so a bare run shows this branch's changes")
+        void defaultsToBranchPoint(@TempDir Path projectRoot) {
             CodemapOptions options = CodemapOptions.builder().root(projectRoot).build();
 
-            assertThat(options.base()).isEqualTo(CodemapOptions.DEFAULT_BASE_REVISION);
+            assertThat(options.comparisonMode()).isEqualTo(ComparisonMode.BRANCH);
+            assertThat(options.base()).as("empty means auto-detect the default branch").isEmpty();
         }
 
         @Test
-        @DisplayName("keep an explicit base")
+        @DisplayName("keeps an explicit base branch")
         void keepsExplicitBase(@TempDir Path projectRoot) {
             CodemapOptions options = CodemapOptions.builder()
                     .root(projectRoot)
                     .base(FEATURE_BRANCH)
                     .build();
 
-            assertThat(options.base()).isEqualTo(FEATURE_BRANCH);
+            assertThat(options.base()).contains(FEATURE_BRANCH);
+            assertThat(options.comparisonMode()).isEqualTo(ComparisonMode.BRANCH);
         }
 
         @Test
-        @DisplayName("reject a blank base rather than silently using HEAD")
-        void rejectsBlankBase(@TempDir Path projectRoot) {
-            assertThatThrownBy(() -> CodemapOptions.builder()
+        @DisplayName("treats a blank base as absent rather than failing")
+        void treatsBlankBaseAsAbsent(@TempDir Path projectRoot) {
+            CodemapOptions options = CodemapOptions.builder()
                     .root(projectRoot)
                     .base("   ")
-                    .build())
-                    .isInstanceOf(InvalidOptionsException.class)
-                    .hasMessageContaining("blank");
+                    .build();
+
+            assertThat(options.base()).isEmpty();
         }
 
         @Test
-        @DisplayName("treat a blank since as absent")
+        @DisplayName("switches to revision mode when a since commit is named")
+        void switchesToRevisionMode(@TempDir Path projectRoot) {
+            CodemapOptions options = CodemapOptions.builder()
+                    .root(projectRoot)
+                    .since("HEAD~5")
+                    .build();
+
+            assertThat(options.comparisonMode()).isEqualTo(ComparisonMode.REVISION);
+            assertThat(options.since()).contains("HEAD~5");
+        }
+
+        @Test
+        @DisplayName("treats a blank since as absent")
         void treatsBlankSinceAsAbsent(@TempDir Path projectRoot) {
             CodemapOptions options = CodemapOptions.builder()
                     .root(projectRoot)
@@ -116,17 +130,7 @@ class CodemapOptionsTest {
                     .build();
 
             assertThat(options.since()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("expose since when a commit range is requested")
-        void exposesSince(@TempDir Path projectRoot) {
-            CodemapOptions options = CodemapOptions.builder()
-                    .root(projectRoot)
-                    .since("HEAD~5")
-                    .build();
-
-            assertThat(options.since()).contains("HEAD~5");
+            assertThat(options.comparisonMode()).isEqualTo(ComparisonMode.BRANCH);
         }
     }
 

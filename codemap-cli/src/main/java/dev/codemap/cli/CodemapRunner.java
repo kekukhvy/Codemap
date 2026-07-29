@@ -29,8 +29,7 @@ public class CodemapRunner {
      */
     public int run(CodemapOptions options) {
         log.info("Project root  : {}", options.root());
-        log.info("Base revision : {}", options.base());
-        options.since().ifPresent(since -> log.info("Since commit  : {}", since));
+        log.info("Comparison    : {}", describeComparison(options));
         log.info("Report output : {}", options.output());
         log.info("Index cache   : {}", options.indexPath());
         options.config().ifPresentOrElse(
@@ -41,5 +40,18 @@ public class CodemapRunner {
 
         log.warn(NOT_IMPLEMENTED_NOTICE);
         return ExitCode.SUCCESS;
+    }
+
+    /**
+     * Describes the comparison in the terms the user chose it, so the log shows
+     * what will be measured rather than which flags were parsed.
+     */
+    private String describeComparison(CodemapOptions options) {
+        return switch (options.comparisonMode()) {
+            case REVISION -> "changes since %s".formatted(options.since().orElseThrow());
+            case BRANCH -> options.base()
+                    .map("changes on this branch since it diverged from %s"::formatted)
+                    .orElse("changes on this branch since it diverged from the default branch");
+        };
     }
 }
