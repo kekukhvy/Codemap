@@ -17,26 +17,37 @@ public final class GitDiffOutcome {
     private final boolean resolved;
     private final List<FileDiff> fileDiffs;
     private final String mergeBase;
+    private final String base;
     private final String failureReason;
 
-    private GitDiffOutcome(boolean resolved, List<FileDiff> fileDiffs, String mergeBase, String failureReason) {
+    private GitDiffOutcome(boolean resolved, List<FileDiff> fileDiffs, String mergeBase, String base, String failureReason) {
         this.resolved = resolved;
         this.fileDiffs = List.copyOf(fileDiffs);
         this.mergeBase = mergeBase;
+        this.base = base;
         this.failureReason = failureReason;
     }
 
     /** A successful resolution, carrying the file diffs and the revision compared from. */
     public static GitDiffOutcome resolved(List<FileDiff> fileDiffs, String mergeBase) {
+        return resolved(fileDiffs, mergeBase, null);
+    }
+
+    /**
+     * A resolved diff that also names the branch it was taken against.
+     *
+     * @param base branch compared against, or {@code null} for a revision comparison
+     */
+    public static GitDiffOutcome resolved(List<FileDiff> fileDiffs, String mergeBase, String base) {
         Objects.requireNonNull(fileDiffs, "fileDiffs");
         Objects.requireNonNull(mergeBase, "mergeBase");
-        return new GitDiffOutcome(true, fileDiffs, mergeBase, null);
+        return new GitDiffOutcome(true, fileDiffs, mergeBase, base, null);
     }
 
     /** A degraded outcome: no statuses can be computed, for the given reason. */
     public static GitDiffOutcome unresolved(String reason) {
         Objects.requireNonNull(reason, "reason");
-        return new GitDiffOutcome(false, List.of(), null, reason);
+        return new GitDiffOutcome(false, List.of(), null, null, reason);
     }
 
     /** Whether a diff was successfully computed. */
@@ -50,6 +61,11 @@ public final class GitDiffOutcome {
     }
 
     /** The revision changes were measured from, present only when resolved. */
+    /** Branch this comparison was taken against, or {@code null} for a revision comparison. */
+    public String base() {
+        return base;
+    }
+
     public String mergeBase() {
         return mergeBase;
     }

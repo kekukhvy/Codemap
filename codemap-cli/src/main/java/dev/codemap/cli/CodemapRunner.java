@@ -28,10 +28,16 @@ public class CodemapRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CodemapRunner.class);
 
+    private static final String SENTENCE_END = ".";
+    private static final String NO_CHANGES = "No changes against the comparison point";
+    private static final String COUNTED_STATUS = "%d %s";
+    private static final String SUMMARY_SEPARATOR = ", ";
+    private static final String REMOVED_LABEL = "removed";
+
     private static final String RENDER_PENDING =
             "Rendering is not implemented yet — the index was written, but there is no report to open.";
     private static final String DIFF_UNRESOLVED =
-            "Change status was not computed: {}. The map will show no git overlay.";
+            "Change status was not computed: {} The map will show no git overlay.";
 
     private final ProjectIndexer indexer;
     private final IndexStore indexStore;
@@ -74,11 +80,25 @@ public class CodemapRunner {
         ChangeAnalysisResult result = changeAnalyzer.analyze(
                 options.root(), options.comparisonMode(), options.base(), options.since(), index);
         if (!result.isResolved()) {
-            log.warn(DIFF_UNRESOLVED, result.failureReason());
+            log.warn(DIFF_UNRESOLVED, endWithPeriod(result.failureReason()));
             return result.index();
         }
         logChangeSummary(result.index());
         return result.index();
+    }
+
+    /**
+     * Ensures a reason reads as a sentence before it is joined to what follows.
+     *
+     * <p>Reasons come from several call sites and some already end in a period.
+     * Appending one unconditionally produced "Pass --base &lt;branch&gt;.. The map",
+     * which reads as a typo in the tool rather than in the repository.
+     */
+    private static String endWithPeriod(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "";
+        }
+        return reason.endsWith(SENTENCE_END) ? reason : reason + SENTENCE_END;
     }
 
     /**
@@ -97,17 +117,17 @@ public class CodemapRunner {
 
         String summary = Stream.of(ChangeStatus.CHANGED, ChangeStatus.ADDED, ChangeStatus.AFFECTED)
                 .filter(status -> byStatus.getOrDefault(status, 0L) > 0)
-                .map(status -> "%d %s".formatted(byStatus.get(status), status.name().toLowerCase(Locale.ROOT)))
-                .collect(Collectors.joining(", "));
+                .map(status -> COUNTED_STATUS.formatted(byStatus.get(status), status.name().toLowerCase(Locale.ROOT)))
+                .collect(Collectors.joining(SUMMARY_SEPARATOR));
 
         int removed = index.removedMethods().size();
         if (summary.isEmpty() && removed == 0) {
-            log.info("No changes against the comparison point");
+            log.info(NO_CHANGES);
             return;
         }
         if (removed > 0) {
-            summary = summary.isEmpty() ? "%d removed".formatted(removed)
-                    : summary + ", %d removed".formatted(removed);
+            String removedPart = COUNTED_STATUS.formatted(removed, REMOVED_LABEL);
+            summary = summary.isEmpty() ? removedPart : summary + SUMMARY_SEPARATOR + removedPart;
         }
         log.info("Changes: {}", summary);
     }

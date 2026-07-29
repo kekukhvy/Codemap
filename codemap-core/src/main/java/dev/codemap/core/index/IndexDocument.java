@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CodeIndex;
+import dev.codemap.core.model.ComparisonRecord;
 import dev.codemap.core.model.EntryPoint;
 import dev.codemap.core.model.FileFingerprint;
 import dev.codemap.core.model.IndexStatistics;
@@ -44,6 +45,7 @@ record IndexDocument(
         @JsonProperty("modules") List<IndexedModule> modules,
         @JsonProperty("classes") List<IndexedClass> classes,
         @JsonProperty("methods") List<IndexedMethod> methods,
+        @JsonProperty("comparison") ComparisonRecord comparison,
         @JsonProperty("removedMethods") List<RemovedMethod> removedMethods,
         @JsonProperty("calls") List<CallEdge> calls,
         @JsonProperty("entryPoints") List<EntryPoint> entryPoints,
@@ -70,6 +72,7 @@ record IndexDocument(
                 index.modules(),
                 index.classes(),
                 index.methods(),
+                index.comparison(),
                 index.removedMethods(),
                 index.calls(),
                 index.entryPoints(),
@@ -85,6 +88,7 @@ record IndexDocument(
                 .modules(modules)
                 .classes(classes)
                 .methods(methods)
+                .comparison(comparison)
                 .removedMethods(removedMethods)
                 .calls(calls)
                 .entryPoints(entryPoints)

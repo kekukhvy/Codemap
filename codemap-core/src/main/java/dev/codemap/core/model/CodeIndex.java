@@ -38,6 +38,7 @@ public final class CodeIndex {
     private final List<IndexedClass> classes;
     private final List<IndexedMethod> methods;
     private final List<RemovedMethod> removedMethods;
+    private final ComparisonRecord comparison;
     private final List<EntryPoint> entryPoints;
     private final Map<String, FileFingerprint> files;
     private final IndexStatistics statistics;
@@ -54,6 +55,7 @@ public final class CodeIndex {
         this.classes = List.copyOf(builder.classes);
         this.methods = List.copyOf(builder.methods);
         this.removedMethods = List.copyOf(builder.removedMethods);
+        this.comparison = builder.comparison;
         this.entryPoints = List.copyOf(builder.entryPoints);
         this.files = Collections.unmodifiableMap(new LinkedHashMap<>(builder.files));
         this.statistics = builder.statistics;
@@ -99,6 +101,18 @@ public final class CodeIndex {
      * {@code removed} nodes (spec §5): lines the diff deleted, with no current
      * declaration and so no place in {@link #methods()}.
      */
+    /**
+     * What change status was measured against, when a diff was resolved.
+     *
+     * <p>Recorded so a report says how it was produced: green means different
+     * things measured from a branch point and from an arbitrary revision.
+     *
+     * @return the comparison, or {@code null} when no diff was resolved
+     */
+    public ComparisonRecord comparison() {
+        return comparison;
+    }
+
     public List<RemovedMethod> removedMethods() {
         return removedMethods;
     }
@@ -181,6 +195,7 @@ public final class CodeIndex {
         private List<IndexedClass> classes = List.of();
         private List<IndexedMethod> methods = List.of();
         private List<RemovedMethod> removedMethods = List.of();
+        private ComparisonRecord comparison;
         private List<EntryPoint> entryPoints = List.of();
         private Map<String, FileFingerprint> files = Map.of();
         private IndexStatistics statistics = IndexStatistics.empty();
@@ -216,6 +231,11 @@ public final class CodeIndex {
 
         public Builder methods(List<IndexedMethod> value) {
             this.methods = Objects.requireNonNull(value, "methods");
+            return this;
+        }
+
+        public Builder comparison(ComparisonRecord value) {
+            this.comparison = value;
             return this;
         }
 

@@ -84,7 +84,7 @@ public final class GitChangeSource {
             return GitDiffOutcome.unresolved(MERGE_BASE_FAILED.formatted(resolvedBase.get()));
         }
 
-        return runDiff(repoRoot, mergeBase.get());
+        return runDiff(repoRoot, mergeBase.get(), resolvedBase.get());
     }
 
     private GitDiffOutcome resolveRevision(Path repoRoot, String since) {
@@ -92,17 +92,24 @@ public final class GitChangeSource {
         if (!verify.succeeded()) {
             return GitDiffOutcome.unresolved(REVISION_FAILED.formatted(since, verify.stderr()));
         }
-        return runDiff(repoRoot, since);
+        return runDiff(repoRoot, since, null);
     }
 
-    /** Runs the diff from {@code baseRevision} to the working tree, including uncommitted work. */
-    private GitDiffOutcome runDiff(Path repoRoot, String baseRevision) {
+    /**
+     * Runs the diff from {@code baseRevision} to the working tree, including
+     * uncommitted work.
+     *
+     * @param baseRevision commit to diff from — the merge base in branch mode
+     * @param base branch that merge base came from, or {@code null} when diffing
+     *        against an explicit revision
+     */
+    private GitDiffOutcome runDiff(Path repoRoot, String baseRevision, String base) {
         GitCommandResult diff = gitCommandRunner.run(repoRoot, "diff", UNIFIED_ZERO, baseRevision);
         if (!diff.succeeded()) {
             log.warn("git diff against {} failed: {}", baseRevision, diff.stderr());
             return GitDiffOutcome.unresolved(REVISION_FAILED.formatted(baseRevision, diff.stderr()));
         }
-        return GitDiffOutcome.resolved(diffParser.parse(diff.stdout()), baseRevision);
+        return GitDiffOutcome.resolved(diffParser.parse(diff.stdout()), baseRevision, base);
     }
 
     /**

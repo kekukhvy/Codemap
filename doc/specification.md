@@ -456,7 +456,7 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "generatedAt": "2026-07-29T21:00:00Z",
   "root": "/path/to/project",
   "comparison": { "mode": "BRANCH", "base": "main", "mergeBase": "83eb2f8" },
@@ -468,6 +468,7 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
   "calls":    [ { "from","to","kind","resolved","line","fromModuleId","toModuleId" } ],
   "entryPoints": [ { "id","moduleId","kind","label","methodId",
                      "detectedBy","source" } ],
+  "removedMethods": [ { "file","lineStart","lineEnd" } ],
   "files":    { "<path>": { "hash","size","modifiedAtMillis" } },
   "statistics": { "filesScanned","filesParsed","classesIndexed",
                   "methodsIndexed","skipped": [ { "file","reason" } ] }
@@ -481,6 +482,17 @@ Each edge in the `calls` array carries:
 - `resolved`: `true` if the symbol solver confirmed the target; `false` if degraded to a name match
 - `line`: call-site line number, 1-based; 0 for type references (which have no single site)
 - `fromModuleId`, `toModuleId`: set only for `CROSS_MODULE` edges, omitted otherwise
+
+**`removedMethods` carries line ranges, not methods.** A deleted method has no
+declaration left to name it: its identity lived in the base revision, which §5
+deliberately does not parse. So the entry is a placeholder — the old path and the
+lines that went away — and the report shows it as a gap rather than as a node
+with a signature.
+
+**`comparison` records how the run was produced.** Green means different things
+measured from a branch point and from an arbitrary revision, so two reports of
+the same project are only comparable if each says what it was measured against.
+Absent when no diff could be resolved.
 
 `statistics.skipped` is what makes a degraded run honest: a file Codemap could
 not parse is named there and reported on the console, rather than silently

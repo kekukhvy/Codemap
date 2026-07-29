@@ -3,6 +3,7 @@ package dev.codemap.core.diff;
 import dev.codemap.core.ComparisonMode;
 import dev.codemap.core.model.ChangeStatus;
 import dev.codemap.core.model.CodeIndex;
+import dev.codemap.core.model.ComparisonRecord;
 import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.RemovedMethod;
@@ -62,8 +63,10 @@ public final class GitChangeAnalyzer {
         List<IndexedClass> statusedClasses = withClassStatus(index.classes(), statusedMethods);
         List<RemovedMethod> removedMethods = toRemovedMethods(assignment.removedRanges());
 
+        ComparisonRecord comparison = new ComparisonRecord(mode, outcome.base(), outcome.mergeBase());
+
         return ChangeAnalysisResult.resolved(
-                rebuildWithStatus(index, statusedClasses, statusedMethods, removedMethods));
+                rebuildWithStatus(index, statusedClasses, statusedMethods, removedMethods, comparison));
     }
 
     private List<RemovedMethod> toRemovedMethods(List<RemovedMethodRange> removedRanges) {
@@ -93,7 +96,7 @@ public final class GitChangeAnalyzer {
     }
 
     private CodeIndex rebuildWithStatus(CodeIndex index, List<IndexedClass> classes, List<IndexedMethod> methods,
-            List<RemovedMethod> removedMethods) {
+            List<RemovedMethod> removedMethods, ComparisonRecord comparison) {
         return CodeIndex.builder()
                 .schemaVersion(index.schemaVersion())
                 .generatedAt(index.generatedAt())
@@ -102,6 +105,7 @@ public final class GitChangeAnalyzer {
                 .classes(classes)
                 .methods(methods)
                 .removedMethods(removedMethods)
+                .comparison(comparison)
                 .entryPoints(index.entryPoints())
                 .files(index.files())
                 .statistics(index.statistics())
