@@ -107,7 +107,7 @@ final class ProgrammaticRouteEntryPointRule implements EntryPointRule {
         return reference.findAncestor(CallableDeclaration.class)
                 .flatMap(declaration -> parameterType(declaration, name))
                 .or(() -> variableType(reference, name))
-                .map(ProgrammaticRouteEntryPointRule::simpleTypeName);
+                .map(SimpleNames::of);
     }
 
     private Optional<String> parameterType(CallableDeclaration<?> declaration, String name) {
@@ -129,11 +129,6 @@ final class ProgrammaticRouteEntryPointRule implements EntryPointRule {
                 .findFirst();
     }
 
-    /** Strips any package qualifier a declared type was written with, e.g. {@code io.javalin.Javalin} to {@code Javalin}. */
-    private static String simpleTypeName(String type) {
-        int lastDot = type.lastIndexOf('.');
-        return lastDot < 0 ? type : type.substring(lastDot + 1);
-    }
 
     /**
      * The id of the handler method a route was registered with.

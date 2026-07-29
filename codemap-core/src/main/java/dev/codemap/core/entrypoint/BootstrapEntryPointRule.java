@@ -46,7 +46,7 @@ final class BootstrapEntryPointRule implements EntryPointRule {
                 EntryPointIds.of(moduleId, EntryPointKind.BOOTSTRAP, methodId),
                 moduleId,
                 EntryPointKind.BOOTSTRAP,
-                LABEL_PREFIX + simpleName(classId),
+                LABEL_PREFIX + SimpleNames.of(classId),
                 methodId,
                 DetectedBy.RULE,
                 new SourceLocation(relativePath, line)));
@@ -58,8 +58,5 @@ final class BootstrapEntryPointRule implements EntryPointRule {
                 && method.hasModifier(Modifier.Keyword.PUBLIC);
     }
 
-    private String simpleName(String classId) {
-        int lastDot = classId.lastIndexOf('.');
-        return lastDot < 0 ? classId : classId.substring(lastDot + 1);
-    }
+
 }

@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Exercises {@link EntryPointDetector} against small real Java fixtures, resolved
@@ -567,6 +568,82 @@ class EntryPointDetectorTest {
             "src/main/java/" + PACKAGE.replace('.', '/') + "/Application.java";
 
     /** Writes a supporting class (e.g. a route-constants holder) without parsing it as the unit under test. */
+    @Nested
+    @DisplayName("degradation")
+    class Degradation {
+
+        /**
+         * Detection runs over code whose types often cannot be resolved — a view
+         * extending an absent framework base, a handler on an unknown receiver.
+         * GUIDELINES calls these the rules most likely to regress, because they
+         * fail silently rather than loudly.
+         */
+        @Test
+        @DisplayName("skips a @Route view whose type cannot be resolved instead of failing")
+        void skipsUnresolvableRouteView() throws IOException {
+            CompilationUnit unit = parse("MysteryView", """
+                    package com.example;
+
+                    import com.vaadin.flow.router.Route;
+
+                    @Route("mystery")
+                    public class MysteryView extends SomeAbsentFrameworkBase {
+                    }
+                    """);
+
+            assertThatCode(() -> detector.detect(unit, MODULE_ID, RELATIVE_PATH))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("skips a route registration whose handler cannot be resolved")
+        void skipsUnresolvableHandler() throws IOException {
+            CompilationUnit unit = parse("Routes", """
+                    package com.example;
+
+                    import io.javalin.Javalin;
+
+                    public class Routes {
+                        public static void register(Javalin app, UnknownHandler handler) {
+                            app.get("/things", handler::list);
+                        }
+                    }
+                    """);
+
+            assertThatCode(() -> detector.detect(unit, MODULE_ID, RELATIVE_PATH))
+                    .as("an unresolvable handler must not end the run")
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("keeps a route whose path constant lives in a class that is not indexed")
+        void keepsRouteWithUnresolvablePathConstant() throws IOException {
+            CompilationUnit unit = parse("Routes", """
+                    package com.example;
+
+                    import io.javalin.Javalin;
+
+                    public class Routes {
+                        public static void register(Javalin app, Handler handler) {
+                            app.get(ExternalPaths.THINGS, handler::list);
+                        }
+                    }
+
+                    class Handler {
+                        public void list() {
+                        }
+                    }
+                    """);
+
+            List<EntryPoint> entryPoints = detector.detect(unit, MODULE_ID, RELATIVE_PATH);
+
+            assertThat(entryPoints)
+                    .as("an unresolvable path degrades to its expression text rather than dropping the route")
+                    .isNotEmpty();
+            assertThat(entryPoints.get(0).label()).contains("THINGS");
+        }
+    }
+
     private void writeAuxiliaryClass(String simpleName, String source) throws IOException {
         String relativePath = "src/main/java/" + PACKAGE.replace('.', '/') + "/" + simpleName + ".java";
         Path file = projectRoot.resolve(relativePath);

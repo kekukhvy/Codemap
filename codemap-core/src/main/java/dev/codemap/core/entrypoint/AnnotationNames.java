@@ -19,8 +19,6 @@ final class AnnotationNames {
     }
 
     static String simpleNameOf(AnnotationExpr annotation) {
-        String name = annotation.getNameAsString();
-        int lastDot = name.lastIndexOf('.');
-        return lastDot < 0 ? name : name.substring(lastDot + 1);
+        return SimpleNames.of(annotation.getNameAsString());
     }
 }
