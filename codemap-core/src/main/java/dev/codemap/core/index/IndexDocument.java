@@ -10,6 +10,7 @@ import dev.codemap.core.model.IndexStatistics;
 import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.IndexedModule;
+import dev.codemap.core.model.RemovedMethod;
 
 import java.time.Instant;
 import java.util.List;
@@ -29,6 +30,8 @@ import java.util.Map;
  * @param modules build modules, each a root of the map
  * @param classes indexed types
  * @param methods indexed methods and constructors
+ * @param removedMethods {@code removed} nodes recovered from the diff, with no
+ *        current declaration to join to
  * @param calls call, type-use, and implementation edges between methods
  * @param entryPoints detected entry points, each a root of the map
  * @param files fingerprint per source file, keyed by relative path
@@ -41,6 +44,7 @@ record IndexDocument(
         @JsonProperty("modules") List<IndexedModule> modules,
         @JsonProperty("classes") List<IndexedClass> classes,
         @JsonProperty("methods") List<IndexedMethod> methods,
+        @JsonProperty("removedMethods") List<RemovedMethod> removedMethods,
         @JsonProperty("calls") List<CallEdge> calls,
         @JsonProperty("entryPoints") List<EntryPoint> entryPoints,
         @JsonProperty("files") Map<String, FileFingerprint> files,
@@ -51,6 +55,7 @@ record IndexDocument(
         modules = modules == null ? List.of() : modules;
         classes = classes == null ? List.of() : classes;
         methods = methods == null ? List.of() : methods;
+        removedMethods = removedMethods == null ? List.of() : removedMethods;
         calls = calls == null ? List.of() : calls;
         entryPoints = entryPoints == null ? List.of() : entryPoints;
         files = files == null ? Map.of() : files;
@@ -65,6 +70,7 @@ record IndexDocument(
                 index.modules(),
                 index.classes(),
                 index.methods(),
+                index.removedMethods(),
                 index.calls(),
                 index.entryPoints(),
                 index.files(),
@@ -79,6 +85,7 @@ record IndexDocument(
                 .modules(modules)
                 .classes(classes)
                 .methods(methods)
+                .removedMethods(removedMethods)
                 .calls(calls)
                 .entryPoints(entryPoints)
                 .files(files)

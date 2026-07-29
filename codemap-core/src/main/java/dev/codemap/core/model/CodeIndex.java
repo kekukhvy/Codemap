@@ -29,7 +29,7 @@ public final class CodeIndex {
      * than migrated: the index is derived data, so recomputing it is always
      * cheaper and safer than writing migration code for every field change.
      */
-    public static final int SCHEMA_VERSION = 1;
+    public static final int SCHEMA_VERSION = 2;
 
     private final int schemaVersion;
     private final Instant generatedAt;
@@ -37,6 +37,7 @@ public final class CodeIndex {
     private final List<IndexedModule> modules;
     private final List<IndexedClass> classes;
     private final List<IndexedMethod> methods;
+    private final List<RemovedMethod> removedMethods;
     private final List<EntryPoint> entryPoints;
     private final Map<String, FileFingerprint> files;
     private final IndexStatistics statistics;
@@ -52,6 +53,7 @@ public final class CodeIndex {
         this.modules = List.copyOf(builder.modules);
         this.classes = List.copyOf(builder.classes);
         this.methods = List.copyOf(builder.methods);
+        this.removedMethods = List.copyOf(builder.removedMethods);
         this.entryPoints = List.copyOf(builder.entryPoints);
         this.files = Collections.unmodifiableMap(new LinkedHashMap<>(builder.files));
         this.statistics = builder.statistics;
@@ -91,6 +93,14 @@ public final class CodeIndex {
 
     public List<IndexedMethod> methods() {
         return methods;
+    }
+
+    /**
+     * {@code removed} nodes (spec §5): lines the diff deleted, with no current
+     * declaration and so no place in {@link #methods()}.
+     */
+    public List<RemovedMethod> removedMethods() {
+        return removedMethods;
     }
 
     /** Every detected entry point: a root of the map (spec §4). */
@@ -170,6 +180,7 @@ public final class CodeIndex {
         private List<IndexedModule> modules = List.of();
         private List<IndexedClass> classes = List.of();
         private List<IndexedMethod> methods = List.of();
+        private List<RemovedMethod> removedMethods = List.of();
         private List<EntryPoint> entryPoints = List.of();
         private Map<String, FileFingerprint> files = Map.of();
         private IndexStatistics statistics = IndexStatistics.empty();
@@ -205,6 +216,11 @@ public final class CodeIndex {
 
         public Builder methods(List<IndexedMethod> value) {
             this.methods = Objects.requireNonNull(value, "methods");
+            return this;
+        }
+
+        public Builder removedMethods(List<RemovedMethod> value) {
+            this.removedMethods = Objects.requireNonNull(value, "removedMethods");
             return this;
         }
 
