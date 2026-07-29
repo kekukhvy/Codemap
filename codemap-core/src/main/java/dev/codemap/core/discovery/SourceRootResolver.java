@@ -1,6 +1,7 @@
 package dev.codemap.core.discovery;
 
-import java.io.File;
+import dev.codemap.core.ProjectPaths;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -51,7 +52,7 @@ public final class SourceRootResolver {
         return PRODUCTION_ROOTS.stream()
                 .map(moduleDirectory::resolve)
                 .filter(Files::isDirectory)
-                .map(root -> toRelativePath(projectRoot, root))
+                .map(root -> ProjectPaths.relative(projectRoot, root))
                 .filter(SourceRootResolver::isProductionPath)
                 .toList();
     }
@@ -68,9 +69,5 @@ public final class SourceRootResolver {
     public static boolean isProductionPath(String relativePath) {
         String normalised = relativePath.toLowerCase(java.util.Locale.ROOT);
         return EXCLUDED_SEGMENTS.stream().noneMatch(normalised::contains);
-    }
-
-    private String toRelativePath(Path projectRoot, Path path) {
-        return projectRoot.relativize(path).toString().replace(File.separatorChar, '/');
     }
 }

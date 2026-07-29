@@ -18,6 +18,9 @@ import java.util.Objects;
  */
 public record FileFingerprint(String hash, long size, long modifiedAtMillis) {
 
+    /** Hash recorded when a file's content cannot be read. */
+    public static final String UNREADABLE_HASH = "unreadable";
+
     public FileFingerprint {
         Objects.requireNonNull(hash, "hash");
     }
@@ -30,6 +33,18 @@ public record FileFingerprint(String hash, long size, long modifiedAtMillis) {
      */
     @JsonIgnore
     public boolean matches(FileFingerprint other) {
-        return other != null && hash.equals(other.hash);
+        return other != null && !isUnreadable() && !other.isUnreadable() && hash.equals(other.hash);
+    }
+
+    /**
+     * Whether the content could not be read when this fingerprint was taken.
+     *
+     * <p>An unreadable file never matches anything, including another unreadable
+     * one, so it is reparsed on every run instead of being silently assumed
+     * unchanged for as long as it stays unreadable.
+     */
+    @JsonIgnore
+    public boolean isUnreadable() {
+        return UNREADABLE_HASH.equals(hash);
     }
 }

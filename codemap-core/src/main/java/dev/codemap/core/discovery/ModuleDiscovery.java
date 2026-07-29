@@ -1,5 +1,6 @@
 package dev.codemap.core.discovery;
 
+import dev.codemap.core.ProjectPaths;
 import dev.codemap.core.model.IndexedModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -190,8 +191,7 @@ public final class ModuleDiscovery {
     /** Walks up from {@code src/main/java} to the directory that owns it. */
     private String relativeModulePath(Path projectRoot, Path sourceRoot) {
         Path moduleDirectory = sourceRoot.getParent().getParent().getParent();
-        Path relative = projectRoot.relativize(moduleDirectory);
-        return relative.toString().replace(java.io.File.separatorChar, '/');
+        return ProjectPaths.relative(projectRoot, moduleDirectory);
     }
 
     private String readOrEmpty(Path file) {

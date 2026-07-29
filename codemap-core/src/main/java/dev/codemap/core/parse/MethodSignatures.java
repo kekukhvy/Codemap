@@ -21,6 +21,10 @@ final class MethodSignatures {
     private static final String VARARGS = "...";
     private static final String RETURN_SEPARATOR = " : ";
 
+    /** A dotted package qualifier preceding a type name, e.g. the {@code java.util.} in {@code java.util.List}. */
+    private static final java.util.regex.Pattern QUALIFIED_NAME =
+            java.util.regex.Pattern.compile("\\b(?:[a-z][a-zA-Z0-9_]*\\.)+(?=[A-Z])");
+
     /**
      * Renders a signature for display, e.g. {@code create(CreateTaskCommand) : Task}.
      *
@@ -38,7 +42,7 @@ final class MethodSignatures {
         String signature = callable.getNameAsString() + "(" + parameters + ")";
 
         if (callable instanceof MethodDeclaration method) {
-            return signature + RETURN_SEPARATOR + method.getType().asString();
+            return signature + RETURN_SEPARATOR + simpleTypeName(method.getType().asString());
         }
         return signature;
     }
@@ -57,14 +61,30 @@ final class MethodSignatures {
      */
     String methodId(String classId, CallableDeclaration<?> callable) {
         String parameterTypes = callable.getParameters().stream()
-                .map(parameter -> parameter.getType().asString())
+                .map(parameter -> simpleTypeName(parameter.getType().asString()))
                 .collect(Collectors.joining(PARAMETER_SEPARATOR));
 
         return classId + ID_SEPARATOR + callable.getNameAsString() + "(" + parameterTypes + ")";
     }
 
     private String renderParameter(Parameter parameter) {
-        String type = parameter.getType().asString();
+        String type = simpleTypeName(parameter.getType().asString());
         return parameter.isVarArgs() ? type + VARARGS : type;
+    }
+
+    /**
+     * Strips package qualifiers from a type, keeping generic arguments intact.
+     *
+     * <p>{@code java.util.List<java.lang.String>} becomes {@code List<String>}.
+     * Most code refers to imported types by their simple name, so normalising the
+     * rare fully-qualified declaration keeps signatures consistent: the same
+     * method reads the same way wherever it appears, and two overloads cannot look
+     * different purely because their authors wrote imports differently.
+     *
+     * @param type type as written in the source
+     * @return the type with every package qualifier removed
+     */
+    private static String simpleTypeName(String type) {
+        return QUALIFIED_NAME.matcher(type).replaceAll("");
     }
 }

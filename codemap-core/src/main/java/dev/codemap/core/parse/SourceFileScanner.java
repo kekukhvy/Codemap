@@ -1,11 +1,11 @@
 package dev.codemap.core.parse;
 
+import dev.codemap.core.ProjectPaths;
 import dev.codemap.core.discovery.SourceRootResolver;
 import dev.codemap.core.model.IndexedModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -57,7 +57,7 @@ public final class SourceFileScanner {
             return paths
                     .filter(Files::isRegularFile)
                     .filter(SourceFileScanner::isIndexableJavaFile)
-                    .map(path -> toRelativePath(projectRoot, path))
+                    .map(path -> ProjectPaths.relative(projectRoot, path))
                     .filter(SourceRootResolver::isProductionPath)
                     .sorted()
                     .toList();
@@ -70,9 +70,5 @@ public final class SourceFileScanner {
     private static boolean isIndexableJavaFile(Path path) {
         String fileName = path.getFileName().toString();
         return fileName.endsWith(JAVA_SUFFIX) && !NON_TYPE_FILES.contains(fileName);
-    }
-
-    private static String toRelativePath(Path projectRoot, Path path) {
-        return projectRoot.relativize(path).toString().replace(File.separatorChar, '/');
     }
 }

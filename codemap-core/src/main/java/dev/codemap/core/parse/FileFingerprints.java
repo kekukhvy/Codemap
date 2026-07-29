@@ -16,9 +16,6 @@ public final class FileFingerprints {
 
     private static final String DIGEST_ALGORITHM = "SHA-256";
 
-    /** Marks a file whose content could not be hashed, so it is always reparsed. */
-    private static final String UNREADABLE_HASH = "unreadable";
-
     private FileFingerprints() {
     }
 
@@ -41,7 +38,7 @@ public final class FileFingerprints {
                     content.length,
                     Files.getLastModifiedTime(file).toMillis());
         } catch (IOException e) {
-            return new FileFingerprint(UNREADABLE_HASH, 0L, 0L);
+            return new FileFingerprint(FileFingerprint.UNREADABLE_HASH, 0L, 0L);
         }
     }
 
