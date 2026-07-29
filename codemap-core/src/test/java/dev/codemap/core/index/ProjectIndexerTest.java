@@ -212,6 +212,71 @@ class ProjectIndexerTest {
         }
     }
 
+    @Nested
+    @DisplayName("entry points")
+    class EntryPoints {
+
+        @Test
+        @DisplayName("detects a BOOTSTRAP entry point and attributes it to the module")
+        void detectsBootstrapEntryPoint() throws IOException {
+            writeProductionClass("Application", """
+                    public class Application {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+            String moduleId = index.modules().get(0).id();
+
+            assertThat(index.entryPoints()).singleElement().satisfies(entryPoint -> {
+                assertThat(entryPoint.kind()).isEqualTo(dev.codemap.core.model.EntryPointKind.BOOTSTRAP);
+                assertThat(entryPoint.moduleId()).isEqualTo(moduleId);
+                assertThat(entryPoint.detectedBy()).isEqualTo(dev.codemap.core.model.DetectedBy.RULE);
+            });
+        }
+
+        @Test
+        @DisplayName("every detected entry point's methodId joins to a method actually indexed")
+        void everyEntryPointMethodIdJoinsToAnIndexedMethod() throws IOException {
+            writeProductionClass("TaskHandler", """
+                    public class TaskHandler {
+                        public void create(String body) {
+                        }
+                    }
+                    """);
+            writeProductionClass("Router", """
+                    public final class Router {
+                        private static final String TASKS = "/api/v1/tasks";
+
+                        public static void register(io.javalin.Javalin app, TaskHandler taskHandler) {
+                            app.post(TASKS, taskHandler::create);
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+            java.util.Set<String> indexedMethodIds = index.methods().stream()
+                    .map(dev.codemap.core.model.IndexedMethod::id)
+                    .collect(java.util.stream.Collectors.toSet());
+
+            assertThat(index.entryPoints()).isNotEmpty();
+            assertThat(index.entryPoints())
+                    .as("an entry point method id that does not join to an indexed method can never be navigated to")
+                    .allSatisfy(entryPoint -> assertThat(indexedMethodIds).contains(entryPoint.methodId()));
+        }
+
+        @Test
+        @DisplayName("produces no entry points, rather than failing, when nothing matches a rule")
+        void handlesProjectWithNoEntryPoints() throws IOException {
+            writeProductionClass("Plain", "public class Plain { void doWork() {} }");
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.entryPoints()).isEmpty();
+        }
+    }
+
     private Path sourceDirectory() throws IOException {
         Path directory = projectRoot.resolve(MAIN_SOURCES).resolve(PACKAGE_PATH);
         Files.createDirectories(directory);

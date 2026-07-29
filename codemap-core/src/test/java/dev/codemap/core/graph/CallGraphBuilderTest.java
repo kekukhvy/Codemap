@@ -330,7 +330,7 @@ class CallGraphBuilderTest {
                     """);
 
             CallGraphBuilder builder = new CallGraphBuilder(projectRoot, List.of(apiModule, commonModule));
-            List<CallEdge> edges = builder.build(parsedFiles).edges();
+            List<CallEdge> edges = builder.build(parsedFiles).callGraph().edges();
 
             assertThat(edges).anySatisfy(edge -> {
                 assertThat(edge.from()).isEqualTo("com.example.api.TaskHandler#create(String)");
@@ -622,7 +622,7 @@ class CallGraphBuilderTest {
 
     private List<CallEdge> buildEdges() {
         CallGraphBuilder builder = new CallGraphBuilder(projectRoot, List.of(module));
-        return builder.build(parsedFiles).edges();
+        return builder.build(parsedFiles).callGraph().edges();
     }
 
     private void writeClass(String simpleName, String source) throws IOException {

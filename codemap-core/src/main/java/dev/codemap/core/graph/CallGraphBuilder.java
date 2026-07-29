@@ -8,8 +8,10 @@ import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSol
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver;
+import dev.codemap.core.entrypoint.EntryPointDetector;
 import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CallGraph;
+import dev.codemap.core.model.EntryPoint;
 import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.parse.ParsedFile;
@@ -27,7 +29,7 @@ import java.util.stream.Collectors;
 
 /**
  * Resolves call, type-use, and implementation edges across an already-parsed
- * project and assembles them into a {@link CallGraph}.
+ * project, and detects entry points alongside them, in a single resolving pass.
  *
  * <p>Parsing (one file at a time, tolerant of bad input) and resolution (needs
  * every source root loaded together) are different concerns, which is why this
@@ -36,6 +38,11 @@ import java.util.stream.Collectors;
  * production source root plus the JDK, so cross-module and JDK types resolve.
  * Symbol resolution failures are expected in real projects and degrade to a
  * name-based edge marked {@code resolved: false} instead of failing the run.
+ *
+ * <p>Entry-point detection (spec §4.1) rides along in the same pass rather than
+ * re-parsing every file a second time: both the call graph and the programmatic
+ * route rule need a compilation unit resolved with the symbol solver attached, so
+ * paying that cost once keeps a large project's indexing time from doubling.
  */
 public final class CallGraphBuilder {
 
@@ -47,6 +54,7 @@ public final class CallGraphBuilder {
     private final SignatureTypeResolver signatureTypeResolver;
     private final ImplementsResolver implementsResolver;
     private final ModuleBoundaryReclassifier moduleBoundaryReclassifier;
+    private final EntryPointDetector entryPointDetector;
 
     public CallGraphBuilder(Path projectRoot, List<IndexedModule> modules) {
         this.projectRoot = projectRoot;
@@ -55,6 +63,7 @@ public final class CallGraphBuilder {
         this.signatureTypeResolver = new SignatureTypeResolver();
         this.implementsResolver = new ImplementsResolver();
         this.moduleBoundaryReclassifier = new ModuleBoundaryReclassifier();
+        this.entryPointDetector = new EntryPointDetector();
     }
 
     /**
@@ -108,29 +117,45 @@ public final class CallGraphBuilder {
     }
 
     /**
-     * Builds the call graph for a set of already-parsed files.
+     * Builds the call graph and detects entry points for a set of already-parsed
+     * files.
      *
      * @param parsedFiles every successfully parsed production file, across all
      *        modules — resolution needs the whole project visible at once
-     * @return the assembled graph; never fails — edges that could not be resolved
-     *         are still present, marked {@code resolved: false}
+     * @return the assembled graph and entry points; never fails — edges that could
+     *         not be resolved are still present, marked {@code resolved: false},
+     *         and a file whose entry points cannot be determined simply
+     *         contributes none
      */
-    public CallGraph build(List<ParsedFile> parsedFiles) {
+    public CallGraphBuild build(List<ParsedFile> parsedFiles) {
         Map<String, String> moduleIdByClassId = moduleIdByClassId(parsedFiles);
         List<CallEdge> edges = new ArrayList<>();
+        List<EntryPoint> entryPoints = new ArrayList<>();
         for (ParsedFile parsedFile : parsedFiles) {
             if (parsedFile.wasSkipped()) {
                 continue;
             }
+            String moduleId = moduleIdOf(parsedFile);
             reparseWithSymbols(parsedFile.file()).ifPresent(unit -> {
                 edges.addAll(callExpressionResolver.resolve(unit, moduleIdByClassId.keySet()));
                 edges.addAll(signatureTypeResolver.resolve(unit, moduleIdByClassId.keySet()));
                 edges.addAll(implementsResolver.resolve(unit, moduleIdByClassId.keySet()));
+                if (moduleId != null) {
+                    entryPoints.addAll(entryPointDetector.detect(unit, moduleId, parsedFile.file()));
+                }
             });
         }
         List<CallEdge> reclassified = moduleBoundaryReclassifier.reclassify(edges, moduleIdByClassId);
-        logSummary(reclassified);
-        return new CallGraph(reclassified);
+        logSummary(reclassified, entryPoints);
+        return new CallGraphBuild(new CallGraph(reclassified), List.copyOf(entryPoints));
+    }
+
+    /** The module a parsed file belongs to, read off any type it declares. */
+    private static String moduleIdOf(ParsedFile parsedFile) {
+        return parsedFile.classes().stream()
+                .findFirst()
+                .map(IndexedClass::moduleId)
+                .orElse(null);
     }
 
     /** Every indexed class's owning module, by class id — the boundary for "inside the project". */
@@ -159,7 +184,7 @@ public final class CallGraphBuilder {
         }
     }
 
-    private void logSummary(List<CallEdge> edges) {
+    private void logSummary(List<CallEdge> edges, List<EntryPoint> entryPoints) {
         long resolvedCount = edges.stream().filter(CallEdge::resolved).count();
         long unresolvedCount = edges.size() - resolvedCount;
         log.info("Built call graph: {} edge(s) ({} resolved, {} unresolved)",
@@ -167,5 +192,6 @@ public final class CallGraphBuilder {
         if (unresolvedCount > 0) {
             log.warn("Call graph is incomplete — {} edge(s) could not be resolved", unresolvedCount);
         }
+        log.info("Detected {} entry point(s)", entryPoints.size());
     }
 }

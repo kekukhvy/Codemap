@@ -37,6 +37,7 @@ public final class CodeIndex {
     private final List<IndexedModule> modules;
     private final List<IndexedClass> classes;
     private final List<IndexedMethod> methods;
+    private final List<EntryPoint> entryPoints;
     private final Map<String, FileFingerprint> files;
     private final IndexStatistics statistics;
     private final CallGraph callGraph;
@@ -51,6 +52,7 @@ public final class CodeIndex {
         this.modules = List.copyOf(builder.modules);
         this.classes = List.copyOf(builder.classes);
         this.methods = List.copyOf(builder.methods);
+        this.entryPoints = List.copyOf(builder.entryPoints);
         this.files = Collections.unmodifiableMap(new LinkedHashMap<>(builder.files));
         this.statistics = builder.statistics;
         this.callGraph = new CallGraph(builder.calls);
@@ -89,6 +91,11 @@ public final class CodeIndex {
 
     public List<IndexedMethod> methods() {
         return methods;
+    }
+
+    /** Every detected entry point: a root of the map (spec §4). */
+    public List<EntryPoint> entryPoints() {
+        return entryPoints;
     }
 
     /** Fingerprint per indexed file, keyed by path relative to the project root. */
@@ -147,6 +154,7 @@ public final class CodeIndex {
         private List<IndexedModule> modules = List.of();
         private List<IndexedClass> classes = List.of();
         private List<IndexedMethod> methods = List.of();
+        private List<EntryPoint> entryPoints = List.of();
         private Map<String, FileFingerprint> files = Map.of();
         private IndexStatistics statistics = IndexStatistics.empty();
         private List<CallEdge> calls = List.of();
@@ -181,6 +189,11 @@ public final class CodeIndex {
 
         public Builder methods(List<IndexedMethod> value) {
             this.methods = Objects.requireNonNull(value, "methods");
+            return this;
+        }
+
+        public Builder entryPoints(List<EntryPoint> value) {
+            this.entryPoints = Objects.requireNonNull(value, "entryPoints");
             return this;
         }
 
