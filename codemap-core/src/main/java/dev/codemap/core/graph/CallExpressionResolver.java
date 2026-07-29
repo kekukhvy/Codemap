@@ -3,6 +3,8 @@ package dev.codemap.core.graph;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
 import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.EdgeKind;
@@ -52,8 +54,43 @@ final class CallExpressionResolver {
             for (MethodCallExpr call : callable.findAll(MethodCallExpr.class)) {
                 toEdge(call, fromId, fromClassId, projectClassIds).ifPresent(edges::add);
             }
+            for (ObjectCreationExpr creation : callable.findAll(ObjectCreationExpr.class)) {
+                toConstructorEdge(creation, fromId, fromClassId, projectClassIds).ifPresent(edges::add);
+            }
         }
         return edges;
+    }
+
+    /**
+     * Records a {@code new Foo(...)} as an edge to the constructor.
+     *
+     * <p>Construction is a call like any other, and the chain it belongs to —
+     * "who builds this object" — is exactly what a reader follows. Collecting only
+     * method calls would leave every constructor looking uncalled.
+     *
+     * <p>Unlike a method call there is no degraded fallback: an unresolvable
+     * {@code new} names a type that is not on the classpath, so it is third-party
+     * by definition and produces nothing.
+     */
+    private Optional<CallEdge> toConstructorEdge(
+            ObjectCreationExpr creation, String fromId, String fromClassId, Set<String> projectClassIds) {
+        int line = creation.getBegin().map(position -> position.line).orElse(UNKNOWN_LINE);
+        ResolvedConstructorDeclaration target;
+        try {
+            target = creation.resolve();
+        } catch (RuntimeException e) {
+            log.debug("Could not resolve constructor {} at line {}: {}",
+                    creation.getTypeAsString(), line, e.getMessage());
+            return Optional.empty();
+        }
+
+        String toClassId = ResolvedMethodIds.classIdOf(target);
+        if (!projectClassIds.contains(toClassId)) {
+            return Optional.empty();
+        }
+
+        EdgeKind kind = toClassId.equals(fromClassId) ? EdgeKind.CALL_INTERNAL : EdgeKind.CALL_EXTERNAL;
+        return Optional.of(new CallEdge(fromId, ResolvedMethodIds.idOf(target), kind, true, line, null, null));
     }
 
     private Optional<CallEdge> toEdge(

@@ -75,7 +75,11 @@ final class DependencyClasspath {
                 collectMatchingJars(cache, declaredNames, jars);
             }
         }
-        log.debug("Resolved {} dependency jar(s) for symbol resolution", jars.size());
+        if (jars.isEmpty() && !declaredNames.isEmpty()) {
+            log.warn("No dependency jars found for symbol resolution — the call graph may be incomplete");
+        } else if (!jars.isEmpty()) {
+            log.debug("Resolved {} dependency jar(s) for symbol resolution", jars.size());
+        }
         return List.copyOf(jars);
     }
 

@@ -81,8 +81,9 @@ public final class CallGraphBuilder {
 
     /** Adds each dependency jar, skipping any the solver cannot open. */
     private static void addDependencyJars(CombinedTypeSolver solver, Path projectRoot) {
+        List<Path> discovered = DependencyClasspath.discover(projectRoot);
         int added = 0;
-        for (Path jar : DependencyClasspath.discover(projectRoot)) {
+        for (Path jar : discovered) {
             try {
                 solver.add(new JarTypeSolver(jar));
                 added++;
@@ -90,7 +91,13 @@ public final class CallGraphBuilder {
                 log.debug("Skipping unreadable dependency jar {}: {}", jar, e.getMessage());
             }
         }
-        log.debug("Symbol solver loaded {} dependency jar(s)", added);
+        if (added > 0) {
+            log.debug("Symbol solver loaded {} dependency jar(s)", added);
+        }
+        if (added < discovered.size() && discovered.size() > 0) {
+            log.warn("Could not load {} of {} dependency jar(s) — symbol resolution may be incomplete",
+                    discovered.size() - added, discovered.size());
+        }
     }
 
     private static JavaParser newResolvingParser(CombinedTypeSolver solver) {
@@ -154,7 +161,11 @@ public final class CallGraphBuilder {
 
     private void logSummary(List<CallEdge> edges) {
         long resolvedCount = edges.stream().filter(CallEdge::resolved).count();
+        long unresolvedCount = edges.size() - resolvedCount;
         log.info("Built call graph: {} edge(s) ({} resolved, {} unresolved)",
-                edges.size(), resolvedCount, edges.size() - resolvedCount);
+                edges.size(), resolvedCount, unresolvedCount);
+        if (unresolvedCount > 0) {
+            log.warn("Call graph is incomplete — {} edge(s) could not be resolved", unresolvedCount);
+        }
     }
 }

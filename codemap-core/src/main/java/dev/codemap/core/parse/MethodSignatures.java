@@ -21,9 +21,17 @@ final class MethodSignatures {
     private static final String VARARGS = "...";
     private static final String RETURN_SEPARATOR = " : ";
 
-    /** A dotted package qualifier preceding a type name, e.g. the {@code java.util.} in {@code java.util.List}. */
+    /**
+     * Everything preceding a type's own name: the package, and any enclosing type.
+     *
+     * <p>Both are stripped, so {@code java.util.List} and
+     * {@code Destination.Builder} reduce to {@code List} and {@code Builder}. The
+     * enclosing type matters because the symbol solver spells a nested type in
+     * full while the declaration site writes it plainly — leaving the difference
+     * in place makes every call to such a constructor dangle.
+     */
     private static final java.util.regex.Pattern QUALIFIED_NAME =
-            java.util.regex.Pattern.compile("\\b(?:[a-z][a-zA-Z0-9_]*\\.)+(?=[A-Z])");
+            java.util.regex.Pattern.compile("\\b(?:[A-Za-z_][a-zA-Z0-9_]*\\.)+(?=[A-Z])");
 
     /**
      * Renders a signature for display, e.g. {@code create(CreateTaskCommand) : Task}.
@@ -69,6 +77,11 @@ final class MethodSignatures {
                 .collect(Collectors.joining(PARAMETER_SEPARATOR));
 
         return classId + ID_SEPARATOR + callable.getNameAsString() + "(" + parameterTypes + ")";
+    }
+
+    /** Renders one parameter's type as it appears in an id, for callers outside this class. */
+    String simpleParameterType(Parameter parameter) {
+        return renderParameter(parameter);
     }
 
     private String renderParameter(Parameter parameter) {

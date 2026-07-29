@@ -283,11 +283,14 @@ class CallGraphBuilderTest {
 
             List<CallEdge> edges = buildEdges();
 
-            assertThat(edges).extracting(CallEdge::from, CallEdge::to).containsExactlyInAnyOrder(
+            // The constructor edge comes from the `new Parity()` in isOdd; a cycle
+            // is recorded once in each direction rather than followed.
+            assertThat(edges).extracting(CallEdge::from, CallEdge::to).contains(
                     org.assertj.core.groups.Tuple.tuple(
                             "com.example.Parity#isEven(int)", "com.example.Parity#isOdd(int)"),
                     org.assertj.core.groups.Tuple.tuple(
                             "com.example.Parity#isOdd(int)", "com.example.Parity#isEven(int)"));
+            assertThat(edges).as("a cycle must not be expanded repeatedly").hasSize(3);
         }
     }
 
@@ -479,6 +482,58 @@ class CallGraphBuilderTest {
             assertThat(implementsEdges).hasSize(1);
             assertThat(implementsEdges).extracting(CallEdge::to)
                     .containsExactly("com.example.JooqTaskRepository");
+        }
+    }
+
+    @Nested
+    @DisplayName("construction")
+    class Construction {
+
+        @Test
+        @DisplayName("records `new Foo(...)` as an edge to the constructor")
+        void constructorInvocationProducesAnEdge() throws IOException {
+            writeClass("Task", """
+                    package com.example;
+
+                    public class Task {
+                        public Task(String name) {}
+                    }
+                    """);
+            writeClass("Factory", """
+                    package com.example;
+
+                    public class Factory {
+                        public Task build() {
+                            return new Task("x");
+                        }
+                    }
+                    """);
+
+            assertThat(buildEdges())
+                    .as("who constructs an object is part of the chain a reader follows")
+                    .extracting(CallEdge::from, CallEdge::to)
+                    .contains(org.assertj.core.groups.Tuple.tuple(
+                            "com.example.Factory#build()", "com.example.Task#Task(String)"));
+        }
+
+        @Test
+        @DisplayName("ignores construction of a type outside the project")
+        void ignoresThirdPartyConstruction() throws IOException {
+            writeClass("Factory", """
+                    package com.example;
+
+                    import java.util.ArrayList;
+
+                    public class Factory {
+                        public Object build() {
+                            return new ArrayList<String>();
+                        }
+                    }
+                    """);
+
+            assertThat(buildEdges())
+                    .extracting(CallEdge::to)
+                    .noneMatch(target -> target.contains("ArrayList"));
         }
     }
 
