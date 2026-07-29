@@ -1,6 +1,7 @@
 package dev.codemap.core.index;
 
 import dev.codemap.core.model.CallEdge;
+import dev.codemap.core.model.ChangeStatus;
 import dev.codemap.core.model.CodeIndex;
 import dev.codemap.core.model.EdgeKind;
 import dev.codemap.core.model.FileFingerprint;
@@ -9,6 +10,7 @@ import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.model.Layer;
+import dev.codemap.core.model.RemovedMethod;
 import dev.codemap.core.model.TypeKind;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -68,6 +70,49 @@ class IndexStoreTest {
                         assertThat(edge.kind()).isEqualTo(EdgeKind.CALL_INTERNAL);
                         assertThat(edge.resolved()).isTrue();
                     });
+        }
+
+        @Test
+        @DisplayName("preserves change status on classes and methods")
+        void preservesChangeStatus() {
+            Path target = workingDirectory.resolve("index.json");
+            CodeIndex index = sampleIndex();
+            IndexedClass statusedClass = index.classes().get(0).withStatus(ChangeStatus.CHANGED);
+            IndexedMethod statusedMethod = index.methods().get(0).withStatus(ChangeStatus.CHANGED);
+            CodeIndex withStatus = CodeIndex.builder()
+                    .root(index.root())
+                    .modules(index.modules())
+                    .classes(List.of(statusedClass))
+                    .methods(List.of(statusedMethod))
+                    .files(index.files())
+                    .statistics(index.statistics())
+                    .calls(index.calls())
+                    .build();
+
+            store.write(withStatus, target);
+            CodeIndex restored = store.read(target).orElseThrow();
+
+            assertThat(restored.classes()).singleElement()
+                    .extracting(IndexedClass::status).isEqualTo(ChangeStatus.CHANGED);
+            assertThat(restored.methods()).singleElement()
+                    .extracting(IndexedMethod::status).isEqualTo(ChangeStatus.CHANGED);
+        }
+
+        @Test
+        @DisplayName("preserves removed methods, which have no current declaration")
+        void preservesRemovedMethods() {
+            Path target = workingDirectory.resolve("index.json");
+            RemovedMethod removed = new RemovedMethod(SOURCE_FILE, 20, 24);
+            CodeIndex withRemoved = CodeIndex.builder()
+                    .root(workingDirectory.toString())
+                    .modules(List.of(new IndexedModule(MODULE_ID, MODULE_ID, MODULE_ID, List.of("src/main/java"))))
+                    .removedMethods(List.of(removed))
+                    .build();
+
+            store.write(withRemoved, target);
+            CodeIndex restored = store.read(target).orElseThrow();
+
+            assertThat(restored.removedMethods()).containsExactly(removed);
         }
 
         @Test
