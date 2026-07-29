@@ -264,6 +264,28 @@ argument is a method reference or lambda.
 > only in its Vaadin admin module. A detector that handled annotations alone
 > would find `main()` and the UI, and miss the entire API.
 
+### 4.1.1 Constant folding across files
+
+Route paths are rarely literals. Both detection paths have to resolve them:
+
+```java
+app.post(TASKS, taskHandler::create);          // TASKS is a private static final field
+@Route(value = DashboardRoutes.HOME)           // HOME lives in another class entirely
+```
+
+So folding follows a constant into the class that declares it, not just within
+the current file. What cannot be resolved statically degrades to the expression
+text rather than dropping the entry point — a route labelled `ExternalPaths.THINGS`
+is less useful than `/things`, but far more useful than a missing root.
+
+One case is worth naming: a landing page is declared `@Route("")`, and an empty
+label would leave the map's most-looked-for node blank. It renders as `/ (root)`.
+
+**Measured on the reference project:** 25 entry points — 19 REST, 4 UI,
+2 BOOTSTRAP. All 19 REST routes come from programmatic registration; the project
+uses annotations only for its Vaadin views. An annotation-only detector would
+have found six of twenty-five.
+
 ### 4.2 Project rules (`codemap.yml`)
 
 Projects with their own conventions extend detection declaratively:
