@@ -201,6 +201,30 @@ class JavaSourceParserTest {
         }
 
         @Test
+        @DisplayName("indexes the enclosing method of an anonymous class without crashing")
+        void handlesAnonymousClasses() throws IOException {
+            ParsedFile withAnonymous = parse("Anon.java", """
+                    package com.example;
+
+                    public class Anon {
+                        public Runnable make() {
+                            return new Runnable() {
+                                @Override
+                                public void run() {
+                                }
+                            };
+                        }
+                    }
+                    """);
+
+            assertThat(withAnonymous.wasSkipped()).isFalse();
+            assertThat(withAnonymous.classes()).extracting(IndexedClass::fqn)
+                    .as("an anonymous class has no name to navigate to, so only its enclosing type is indexed")
+                    .containsExactly("com.example.Anon");
+            assertThat(withAnonymous.methods()).extracting(IndexedMethod::name).containsExactly("make");
+        }
+
+        @Test
         @DisplayName("parses a file with no types without producing anything")
         void handlesFileWithoutTypes() throws IOException {
             ParsedFile empty = parse("Empty.java", "package com.example;\n");

@@ -68,6 +68,20 @@ class ProjectIndexerTest {
         }
 
         @Test
+        @DisplayName("never indexes generated sources nested under a production root")
+        void excludesGeneratedSources() throws IOException {
+            writeProductionClass("Service", "public class Service {}");
+            Path generated = projectRoot.resolve(MAIN_SOURCES).resolve("build/generated");
+            Files.createDirectories(generated);
+            Files.writeString(generated.resolve("Tables.java"), "package build.generated;\npublic class Tables {}");
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.classes()).extracting(IndexedClass::simpleName).containsExactly("Service");
+            assertThat(index.files().keySet()).noneMatch(file -> file.contains("generated"));
+        }
+
+        @Test
         @DisplayName("skips package-info, which declares no type")
         void skipsPackageInfo() throws IOException {
             writeProductionClass("Service", "public class Service {}");
