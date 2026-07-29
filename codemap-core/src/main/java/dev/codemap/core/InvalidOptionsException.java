@@ -12,6 +12,8 @@ package dev.codemap.core;
  */
 public class InvalidOptionsException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     public InvalidOptionsException(String message) {
         super(message);
     }

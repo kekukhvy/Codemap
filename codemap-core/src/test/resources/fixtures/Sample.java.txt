@@ -1,0 +1,51 @@
+package com.example.domain.order;
+
+import java.util.List;
+
+/**
+ * An order placed by a customer. Holds the lines and the total.
+ *
+ * <p>Longer prose that must not appear in the summary.
+ */
+public class Sample {
+
+    private final String id;
+
+    /** Creates an order. */
+    public Sample(String id) {
+        this.id = id;
+    }
+
+    /**
+     * Adds a line to the order.
+     *
+     * @param sku what to add
+     */
+    public void addLine(String sku) {
+        System.out.println(sku);
+    }
+
+    public void addLine(String sku, int quantity) {
+        System.out.println(sku + quantity);
+    }
+
+    public List<String> lines(int limit, String... filters) {
+        return List.of();
+    }
+
+    /** A nested type worth navigating to. */
+    public static final class Builder {
+        public Sample build() {
+            return new Sample("x");
+        }
+    }
+
+    public enum Status { NEW, DONE }
+
+    public record Line(String sku, int quantity) {
+    }
+
+    public interface Visitor {
+        void visit(Sample sample);
+    }
+}

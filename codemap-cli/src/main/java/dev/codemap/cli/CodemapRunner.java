@@ -1,25 +1,37 @@
 package dev.codemap.cli;
 
 import dev.codemap.core.CodemapOptions;
+import dev.codemap.core.index.IndexStore;
+import dev.codemap.core.index.ProjectIndexer;
+import dev.codemap.core.model.CodeIndex;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Drives one analysis run from validated options.
  *
- * <p>The pipeline stages it will orchestrate — discover, parse, resolve, detect,
- * diff, render — do not exist yet. Until they do this reports the configuration
- * it resolved, which is what makes the argument handling verifiable on its own.
- *
- * <p>The class exists now rather than later so the CLI has a stable seam: each
- * stage is added behind this call without reshaping the entry point.
+ * <p>Currently runs the indexing stage and persists the result. The remaining
+ * stages — call graph, entry-point detection, diff, render — are added behind this
+ * same call as they are built, so the entry point does not reshape each time.
  */
 public class CodemapRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CodemapRunner.class);
 
-    private static final String NOT_IMPLEMENTED_NOTICE =
-            "Analysis is not implemented yet — this build resolves and reports configuration only.";
+    private static final String RENDER_PENDING =
+            "Rendering is not implemented yet — the index was written, but there is no report to open.";
+
+    private final ProjectIndexer indexer;
+    private final IndexStore indexStore;
+
+    public CodemapRunner() {
+        this(new ProjectIndexer(), new IndexStore());
+    }
+
+    CodemapRunner(ProjectIndexer indexer, IndexStore indexStore) {
+        this.indexer = indexer;
+        this.indexStore = indexStore;
+    }
 
     /**
      * Runs the pipeline for the given options.
@@ -30,15 +42,12 @@ public class CodemapRunner {
     public int run(CodemapOptions options) {
         log.info("Project root  : {}", options.root());
         log.info("Comparison    : {}", describeComparison(options));
-        log.info("Report output : {}", options.output());
-        log.info("Index cache   : {}", options.indexPath());
-        options.config().ifPresentOrElse(
-                config -> log.info("Config file   : {}", config),
-                () -> log.info("Config file   : none (using built-in rules)"));
-        log.info("AI fallback   : {}", options.aiEnabled() ? "enabled" : "disabled");
-        log.info("Rebuild index : {}", options.rebuild());
+        log.info("Index         : {}", options.indexPath());
 
-        log.warn(NOT_IMPLEMENTED_NOTICE);
+        CodeIndex index = indexer.index(options.root());
+        indexStore.write(index, options.indexPath());
+
+        log.warn(RENDER_PENDING);
         return ExitCode.SUCCESS;
     }
 

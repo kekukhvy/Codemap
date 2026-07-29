@@ -12,9 +12,12 @@ methods touched by recent git changes are outlined in colour on top of that.
 
 ## Status
 
-**In development.** The build and CLI exist: the tool runs, validates its
-arguments, and reports the configuration it resolved. **No analysis happens
-yet** — running it prints the resolved settings and says so.
+**In development.** The tool indexes a project today: it discovers build
+modules, parses production sources, and writes `codemap/index.json` with every
+class, method, signature, line range, and Javadoc summary.
+
+**There is no report yet** — the map itself arrives with M6. Until then the
+output is the index file.
 
 Progress is tracked as milestones M1–M8; see the
 [issues](https://github.com/kekukhvy/Codemap/issues).
@@ -22,8 +25,9 @@ Progress is tracked as milestones M1–M8; see the
 | | Milestone | State |
 |---|---|---|
 | M1 | Project skeleton — modules, CLI, fat JAR | ✅ done |
-| M2 | Index the code | ⏳ next |
-| M3–M8 | Call graph → report → incremental → config/AI | planned |
+| M2 | Index the code — modules, classes, methods, Javadoc | ✅ done |
+| M3 | Call graph | ⏳ next |
+| M4–M8 | Entry points → git status → report → incremental → config/AI | planned |
 
 The rest of this document describes the tool as specified; see
 [`doc/specification.md`](doc/specification.md) for the design rationale.
