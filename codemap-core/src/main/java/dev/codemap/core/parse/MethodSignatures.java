@@ -60,8 +60,12 @@ final class MethodSignatures {
      * @return a stable identifier
      */
     String methodId(String classId, CallableDeclaration<?> callable) {
+        // Rendered exactly as the display signature is, varargs included: an id
+        // that dropped the ellipsis would not match the one the symbol solver
+        // builds for the same declaration, and every call to that method would
+        // dangle.
         String parameterTypes = callable.getParameters().stream()
-                .map(parameter -> simpleTypeName(parameter.getType().asString()))
+                .map(this::renderParameter)
                 .collect(Collectors.joining(PARAMETER_SEPARATOR));
 
         return classId + ID_SEPARATOR + callable.getNameAsString() + "(" + parameterTypes + ")";
