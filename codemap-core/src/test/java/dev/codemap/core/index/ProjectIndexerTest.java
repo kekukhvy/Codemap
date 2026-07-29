@@ -147,6 +147,63 @@ class ProjectIndexerTest {
     }
 
     @Nested
+    @DisplayName("entry points across modules")
+    class EntryPointsPerModule {
+
+        @Test
+        @DisplayName("attributes each entry point to the module that declares it")
+        void separatesEntryPointsByModule() throws IOException {
+            Files.writeString(projectRoot.resolve("settings.gradle"), "include 'api'\ninclude 'admin'\ninclude 'shared'\n");
+            writeClassIn("api", "ApiApplication", """
+                    public class ApiApplication {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+            writeClassIn("admin", "AdminApplication", """
+                    public class AdminApplication {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+            writeClassIn("shared", "Util", """
+                    public class Util {
+                        public static void help() {
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.entryPointsOf("api")).singleElement()
+                    .satisfies(entryPoint -> assertThat(entryPoint.moduleId()).isEqualTo("api"));
+            assertThat(index.entryPointsOf("admin")).hasSize(1);
+            assertThat(index.entryPointsOf("shared"))
+                    .as("a library module reached by nothing external has no entry point, which is normal")
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("indexes a project where most modules have no entry point at all")
+        void toleratesModulesWithoutEntryPoints() throws IOException {
+            Files.writeString(projectRoot.resolve("settings.gradle"), "include 'app'\ninclude 'lib-a'\ninclude 'lib-b'\n");
+            writeClassIn("app", "App", """
+                    public class App {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+            writeClassIn("lib-a", "A", "public class A {}");
+            writeClassIn("lib-b", "B", "public class B {}");
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.modules()).hasSize(3);
+            assertThat(index.entryPoints()).hasSize(1);
+        }
+    }
+
+    @Nested
     @DisplayName("multi-module projects")
     class MultiModule {
 
@@ -209,6 +266,71 @@ class ProjectIndexerTest {
             CodeIndex index = indexer.index(projectRoot);
 
             assertThat(index.calls()).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("entry points")
+    class EntryPoints {
+
+        @Test
+        @DisplayName("detects a BOOTSTRAP entry point and attributes it to the module")
+        void detectsBootstrapEntryPoint() throws IOException {
+            writeProductionClass("Application", """
+                    public class Application {
+                        public static void main(String[] args) {
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+            String moduleId = index.modules().get(0).id();
+
+            assertThat(index.entryPoints()).singleElement().satisfies(entryPoint -> {
+                assertThat(entryPoint.kind()).isEqualTo(dev.codemap.core.model.EntryPointKind.BOOTSTRAP);
+                assertThat(entryPoint.moduleId()).isEqualTo(moduleId);
+                assertThat(entryPoint.detectedBy()).isEqualTo(dev.codemap.core.model.DetectedBy.RULE);
+            });
+        }
+
+        @Test
+        @DisplayName("every detected entry point's methodId joins to a method actually indexed")
+        void everyEntryPointMethodIdJoinsToAnIndexedMethod() throws IOException {
+            writeProductionClass("TaskHandler", """
+                    public class TaskHandler {
+                        public void create(String body) {
+                        }
+                    }
+                    """);
+            writeProductionClass("Router", """
+                    public final class Router {
+                        private static final String TASKS = "/api/v1/tasks";
+
+                        public static void register(io.javalin.Javalin app, TaskHandler taskHandler) {
+                            app.post(TASKS, taskHandler::create);
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+            java.util.Set<String> indexedMethodIds = index.methods().stream()
+                    .map(dev.codemap.core.model.IndexedMethod::id)
+                    .collect(java.util.stream.Collectors.toSet());
+
+            assertThat(index.entryPoints()).isNotEmpty();
+            assertThat(index.entryPoints())
+                    .as("an entry point method id that does not join to an indexed method can never be navigated to")
+                    .allSatisfy(entryPoint -> assertThat(indexedMethodIds).contains(entryPoint.methodId()));
+        }
+
+        @Test
+        @DisplayName("produces no entry points, rather than failing, when nothing matches a rule")
+        void handlesProjectWithNoEntryPoints() throws IOException {
+            writeProductionClass("Plain", "public class Plain { void doWork() {} }");
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.entryPoints()).isEmpty();
         }
     }
 

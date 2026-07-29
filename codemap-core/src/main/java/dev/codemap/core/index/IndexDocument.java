@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CodeIndex;
+import dev.codemap.core.model.EntryPoint;
 import dev.codemap.core.model.FileFingerprint;
 import dev.codemap.core.model.IndexStatistics;
 import dev.codemap.core.model.IndexedClass;
@@ -29,6 +30,7 @@ import java.util.Map;
  * @param classes indexed types
  * @param methods indexed methods and constructors
  * @param calls call, type-use, and implementation edges between methods
+ * @param entryPoints detected entry points, each a root of the map
  * @param files fingerprint per source file, keyed by relative path
  * @param statistics counts and skipped files from the run
  */
@@ -40,6 +42,7 @@ record IndexDocument(
         @JsonProperty("classes") List<IndexedClass> classes,
         @JsonProperty("methods") List<IndexedMethod> methods,
         @JsonProperty("calls") List<CallEdge> calls,
+        @JsonProperty("entryPoints") List<EntryPoint> entryPoints,
         @JsonProperty("files") Map<String, FileFingerprint> files,
         @JsonProperty("statistics") IndexStatistics statistics) {
 
@@ -49,6 +52,7 @@ record IndexDocument(
         classes = classes == null ? List.of() : classes;
         methods = methods == null ? List.of() : methods;
         calls = calls == null ? List.of() : calls;
+        entryPoints = entryPoints == null ? List.of() : entryPoints;
         files = files == null ? Map.of() : files;
         statistics = statistics == null ? IndexStatistics.empty() : statistics;
     }
@@ -62,6 +66,7 @@ record IndexDocument(
                 index.classes(),
                 index.methods(),
                 index.calls(),
+                index.entryPoints(),
                 index.files(),
                 index.statistics());
     }
@@ -75,6 +80,7 @@ record IndexDocument(
                 .classes(classes)
                 .methods(methods)
                 .calls(calls)
+                .entryPoints(entryPoints)
                 .files(files)
                 .statistics(statistics)
                 .build();
