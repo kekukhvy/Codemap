@@ -1,6 +1,8 @@
 package dev.codemap.core.index;
 
+import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CodeIndex;
+import dev.codemap.core.model.EdgeKind;
 import dev.codemap.core.model.FileFingerprint;
 import dev.codemap.core.model.IndexStatistics;
 import dev.codemap.core.model.IndexedClass;
@@ -59,6 +61,13 @@ class IndexStoreTest {
                         assertThat(method.source()).contains("void run()");
                     });
             assertThat(restored.files()).containsKey(SOURCE_FILE);
+            assertThat(restored.callGraph().edges()).singleElement()
+                    .satisfies(edge -> {
+                        assertThat(edge.from()).isEqualTo(CLASS_ID + "#run()");
+                        assertThat(edge.to()).isEqualTo(CLASS_ID + "#helper()");
+                        assertThat(edge.kind()).isEqualTo(EdgeKind.CALL_INTERNAL);
+                        assertThat(edge.resolved()).isTrue();
+                    });
         }
 
         @Test
@@ -126,6 +135,9 @@ class IndexStoreTest {
                 CLASS_ID + "#run()", CLASS_ID, "run", "run() : void", SOURCE_FILE,
                 5, 7, null, "    void run() {\n    }", false);
 
+        CallEdge internalCall = new CallEdge(
+                CLASS_ID + "#run()", CLASS_ID + "#helper()", EdgeKind.CALL_INTERNAL, true, 6, null, null);
+
         return CodeIndex.builder()
                 .root(workingDirectory.toString())
                 .modules(List.of(new IndexedModule(MODULE_ID, MODULE_ID, MODULE_ID, List.of("src/main/java"))))
@@ -133,6 +145,7 @@ class IndexStoreTest {
                 .methods(List.of(run))
                 .files(Map.of(SOURCE_FILE, new FileFingerprint("abc123", 120L, 1_700_000_000_000L)))
                 .statistics(new IndexStatistics(1, 1, 1, 1, List.of()))
+                .calls(List.of(internalCall))
                 .build();
     }
 }

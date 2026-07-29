@@ -73,6 +73,20 @@ final class MethodSignatures {
     }
 
     /**
+     * Removes the spaces a type solver inserts after commas in generic arguments.
+     *
+     * <p>{@code Function<A, B>} becomes {@code Function<A,B>}, matching how
+     * JavaParser renders the same type at the declaration site. Without this the
+     * two spellings produce different ids and an edge silently fails to join.
+     *
+     * @param type type as described by the solver
+     * @return the type with generic argument spacing normalised
+     */
+    static String compactGenericArguments(String type) {
+        return type.replace(", ", ",");
+    }
+
+    /**
      * Strips package qualifiers from a type, keeping generic arguments intact.
      *
      * <p>{@code java.util.List<java.lang.String>} becomes {@code List<String>}.
@@ -81,10 +95,14 @@ final class MethodSignatures {
      * method reads the same way wherever it appears, and two overloads cannot look
      * different purely because their authors wrote imports differently.
      *
+     * <p>Package-visible so {@link ResolvedMethodIds} can normalise symbol-solver
+     * type descriptions the same way, keeping resolved call targets addressable by
+     * the ids this class produces.
+     *
      * @param type type as written in the source
      * @return the type with every package qualifier removed
      */
-    private static String simpleTypeName(String type) {
+    static String simpleTypeName(String type) {
         return QUALIFIED_NAME.matcher(type).replaceAll("");
     }
 }

@@ -1,6 +1,8 @@
 package dev.codemap.core.index;
 
+import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CodeIndex;
+import dev.codemap.core.model.EdgeKind;
 import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedModule;
 import org.junit.jupiter.api.DisplayName;
@@ -160,6 +162,53 @@ class ProjectIndexerTest {
             assertThat(index.modules()).extracting(IndexedModule::name).containsExactly("api", "core");
             assertThat(index.classesOf("api")).extracting(IndexedClass::simpleName).containsExactly("Endpoint");
             assertThat(index.classesOf("core")).extracting(IndexedClass::simpleName).containsExactly("Engine");
+        }
+    }
+
+    @Nested
+    @DisplayName("call graph")
+    class CallGraph {
+
+        @Test
+        @DisplayName("resolves calls across the indexed project and includes them in the index")
+        void buildsCallGraphAlongsideClasses() throws IOException {
+            writeProductionClass("TaskHandler", """
+                    public class TaskHandler {
+                        private final CreateTaskUseCase createTaskUseCase;
+
+                        public TaskHandler(CreateTaskUseCase createTaskUseCase) {
+                            this.createTaskUseCase = createTaskUseCase;
+                        }
+
+                        public void create() {
+                            createTaskUseCase.execute();
+                        }
+                    }
+                    """);
+            writeProductionClass("CreateTaskUseCase", """
+                    public class CreateTaskUseCase {
+                        public void execute() {
+                        }
+                    }
+                    """);
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.calls()).anySatisfy(edge -> {
+                assertThat(edge.from()).isEqualTo("com.example.TaskHandler#create()");
+                assertThat(edge.to()).isEqualTo("com.example.CreateTaskUseCase#execute()");
+                assertThat(edge.kind()).isEqualTo(EdgeKind.CALL_EXTERNAL);
+            });
+        }
+
+        @Test
+        @DisplayName("builds no edges, rather than failing, when nothing calls anything")
+        void handlesProjectWithNoCalls() throws IOException {
+            writeProductionClass("Empty", "public class Empty {}");
+
+            CodeIndex index = indexer.index(projectRoot);
+
+            assertThat(index.calls()).isEmpty();
         }
     }
 

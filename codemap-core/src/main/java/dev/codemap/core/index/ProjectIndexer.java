@@ -1,6 +1,8 @@
 package dev.codemap.core.index;
 
 import dev.codemap.core.discovery.ModuleDiscovery;
+import dev.codemap.core.graph.CallGraphBuilder;
+import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.CodeIndex;
 import dev.codemap.core.model.FileFingerprint;
 import dev.codemap.core.model.IndexStatistics;
@@ -59,6 +61,7 @@ public final class ProjectIndexer {
 
         List<IndexedClass> classes = new ArrayList<>();
         List<IndexedMethod> methods = new ArrayList<>();
+        List<ParsedFile> parsedFiles = new ArrayList<>();
         Map<String, FileFingerprint> fingerprints = new LinkedHashMap<>();
         List<IndexStatistics.SkippedFile> skipped = new ArrayList<>();
         int filesScanned = 0;
@@ -79,6 +82,7 @@ public final class ProjectIndexer {
                 }
                 classes.addAll(parsed.classes());
                 methods.addAll(parsed.methods());
+                parsedFiles.add(parsed);
             }
         }
 
@@ -88,6 +92,8 @@ public final class ProjectIndexer {
                 classes.size(),
                 methods.size(),
                 List.copyOf(skipped));
+
+        List<CallEdge> calls = new CallGraphBuilder(projectRoot, modules).build(parsedFiles).edges();
 
         logSummary(statistics, startedAt);
 
@@ -99,6 +105,7 @@ public final class ProjectIndexer {
                 .methods(methods)
                 .files(fingerprints)
                 .statistics(statistics)
+                .calls(calls)
                 .build();
     }
 
