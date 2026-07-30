@@ -670,13 +670,39 @@
     if (link.selfLink) {
       return routeSelfLink(link, obstacles);
     }
-    const sourceExitX = link.from.rect.x + link.from.rect.width;
-    const targetEntryX = link.to.rect.x;
     const sourceY = link.from.rowY;
     const targetY = link.to.rowY;
-    const laneX = laneCorridorX(sourceExitX, targetEntryX, link.lane, sourceY, targetY, obstacles);
-    const sourceStubX = sourceExitX + LANE_SPACING * (link.lane + 1);
-    const targetStubX = targetEntryX - LANE_SPACING * (link.lane + 1);
+    const sourceExitX = link.from.rect.x + link.from.rect.width;
+    // A link running to a box in the same column (or behind) approaches from the
+    // right, the side the corridor is on. Entering on the left would mean
+    // crossing the whole target box to reach its own edge.
+    const targetLeftX = link.to.rect.x;
+    const targetRightX = link.to.rect.x + link.to.rect.width;
+
+    // The corridor must clear BOTH endpoint boxes, not just the ones in
+    // between. When the target sits in the same column as the source — or to
+    // its left — a corridor placed between their edges lands *inside* them, and
+    // since neither endpoint is in `obstacles`, nothing corrects it: the line
+    // then sweeps back across its own boxes' interiors. Treating both endpoints
+    // as walls makes forward, same-column, and backward links one case.
+    const corridorObstacles = obstacles.concat([{ rect: link.from.rect }, { rect: link.to.rect }]);
+    const laneX = laneCorridorX(sourceExitX, link.lane, sourceY, targetY, corridorObstacles);
+
+    // Which side of the target the corridor ends up on decides the entry side.
+    // Approaching from the left is only possible while the corridor is still
+    // left of the target: obstacle clearance can push it past, and entering the
+    // left edge from beyond the right one would cut clean through the box.
+    const entersFromRight = laneX >= targetLeftX;
+    const targetEntryX = entersFromRight ? targetRightX : targetLeftX;
+
+    // Stubs step out from each row toward the corridor, clamped so a high lane
+    // index cannot push one past the corridor and send the leg backwards —
+    // unclamped, lane >= 7 put a stub inside the next column.
+    const sourceStubX = Math.min(sourceExitX + LANE_SPACING * (link.lane + 1), laneX);
+    const targetStubX = entersFromRight
+        ? Math.max(targetEntryX + LANE_SPACING * (link.lane + 1), laneX)
+        : Math.min(Math.max(targetEntryX - LANE_SPACING * (link.lane + 1), sourceExitX), laneX);
+
     const sourceDetourY = rowLegDetourY(sourceStubX, sourceY, laneX, targetY, obstacles);
     const targetDetourY = rowLegDetourY(targetStubX, targetY, laneX, sourceY, obstacles);
     const points = [
@@ -745,11 +771,13 @@
    * the same box still end up on two distinct x's, so a shared corridor with
    * several boxes to route around never merges two lanes into one (AC11).
    */
-  function laneCorridorX(sourceExitX, targetEntryX, lane, sourceY, targetY, obstacles) {
-    const baseX = Math.min(sourceExitX, targetEntryX);
+  function laneCorridorX(sourceExitX, lane, sourceY, targetY, obstacles) {
+    // Anchored at the source's right edge, never at min(source, target): for a
+    // same-column or backward link the target's left edge is at or behind the
+    // source's, so a min-based base would place the corridor inside the boxes.
     const laneOffset = LANE_SPACING * (lane + 1);
-    const clearanceFloor = obstacleClearanceFloor(baseX, sourceY, targetY, obstacles);
-    return Math.max(baseX + laneOffset, clearanceFloor + laneOffset);
+    const clearanceFloor = obstacleClearanceFloor(sourceExitX, sourceY, targetY, obstacles);
+    return Math.max(sourceExitX, clearanceFloor) + laneOffset;
   }
 
   /** The furthest right edge, among every obstacle the vertical run would otherwise cross, that lanes must clear. */
@@ -1579,7 +1607,12 @@
       if (!sourcePosition || !targetPosition) {
         return null;
       }
-      const gapKey = sourcePosition.rect.x + ">" + targetPosition.rect.x;
+      // Keyed by the corridor the link actually occupies — the source's right
+      // edge — not by the (source x, target x) pair. Two links leaving the same
+      // column share one physical corridor even when their targets differ, and
+      // keying by the pair gave them independent lane sequences that both
+      // started at 0, so they collided (AC11).
+      const gapKey = String(sourcePosition.rect.x + sourcePosition.rect.width);
       return { ...link, source: sourcePosition.classId, target: targetPosition.classId, gapKey, sourcePosition, targetPosition };
     }
 
