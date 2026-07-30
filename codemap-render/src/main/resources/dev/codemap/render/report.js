@@ -151,6 +151,13 @@
   }
 
   const STATUS_GLYPH_CLASS = "status-glyph";
+  /** The compartment set a collapsed box renders with: none at all. */
+  const EMPTY_COMPARTMENTS = { constructors: [], publicMethods: [], revealedPrivateMethods: [] };
+  const COLLAPSE_TOGGLE_CLASS = "collapse-toggle";
+  /** Shown when the box is open — clicking it folds the box away. */
+  const COLLAPSE_GLYPH_OPEN = "(−)";
+  /** Shown when the box is collapsed — clicking it brings the rows back. */
+  const COLLAPSE_GLYPH_CLOSED = "(…)";
   const BOX_HEADER_FILL_CLASS = "box-header-fill";
 
   const STATUS_GLYPH_SYMBOL = {
@@ -1533,7 +1540,8 @@
    * @param rootPillId the entry point id, column 0
    * @return {@code {boxPositions: Map<classId, {rect, column}>}}
    */
-  function layoutDiagram(diagram, index, rootPillId) {
+  function layoutDiagram(diagram, index, rootPillId, collapsedClassIds) {
+    const collapsed = collapsedClassIds || new Set();
     const classIds = [...diagram.boxes.keys()];
     const links = [...pillLinksFor(index, rootPillId), ...diagramLinksFor(diagram, index)];
     const columns = assignColumns([rootPillId, ...classIds], links, rootPillId);
@@ -1552,7 +1560,7 @@
         continue;
       }
       const ordered = orderColumnByBarycentre(boxesInColumn, links, parentPositions);
-      columnX = placeColumn(ordered, column, columnX, diagram, index, boxPositions, parentPositions);
+      columnX = placeColumn(ordered, column, columnX, diagram, index, boxPositions, parentPositions, collapsed);
     }
     const pillRect = { x: ROOT_MARGIN_X, y: ROOT_MARGIN_Y, width: PILL_WIDTH, height: PILL_HEIGHT };
     return { boxPositions, pillRect };
@@ -1596,13 +1604,18 @@
    * box and the caller carries the running offset — a fixed stride would let a
    * wide box overlap the column beside it.
    */
-  function placeColumn(orderedClassIds, column, columnX, diagram, index, boxPositions, parentPositions) {
+  function placeColumn(orderedClassIds, column, columnX, diagram, index, boxPositions, parentPositions, collapsed) {
     let cursorY = ROOT_MARGIN_Y;
     let columnWidth = BOX_WIDTH;
     for (const classId of orderedClassIds) {
       const box = diagram.boxFor(classId);
-      const compartments = buildCompartments(index, classId, box.revealedPrivateMethodIds);
-      const height = boxHeight(compartments);
+      const isCollapsed = collapsed.has(classId);
+      // A collapsed box keeps its identity and its links but gives up its rows,
+      // so the reader can push a class they have already read out of the way.
+      const compartments = isCollapsed
+          ? EMPTY_COMPARTMENTS
+          : buildCompartments(index, classId, box.revealedPrivateMethodIds);
+      const height = isCollapsed ? HEADER_HEIGHT : boxHeight(compartments);
       const width = boxWidthFor(compartments, index.classOf(classId) && index.classOf(classId).simpleName);
       columnWidth = Math.max(columnWidth, width);
       const rect = { x: columnX, y: cursorY, width, height };
@@ -1635,6 +1648,8 @@
       this.expandedMethodRows = new Map();
       /** classIds whose header expander is currently open. */
       this.expandedClassHeaders = new Set();
+      /** classIds the reader has collapsed down to just their header. */
+      this.collapsedClassIds = new Set();
       /** The entry method's underline, which no link owns and cleanup must not drop. */
       this.entryUnderlinedMethodId = null;
       this.openPillId = null;
@@ -1685,6 +1700,7 @@
       this.controller.diagram.clear();
       this.expandedMethodRows.clear();
       this.expandedClassHeaders.clear();
+      this.collapsedClassIds.clear();
       this.underlinedMethodIds.clear();
       this.entryUnderlinedMethodId = null;
       this.selection = null;
@@ -1776,7 +1792,7 @@
       if (!this.openPillId) {
         return;
       }
-      this.lastLayout = layoutDiagram(this.controller.diagram, this.index, this.openPillId);
+      this.lastLayout = layoutDiagram(this.controller.diagram, this.index, this.openPillId, this.collapsedClassIds);
       this.drawPill(this.lastLayout);
       this.drawBoxes(this.lastLayout);
       this.drawLinks();
@@ -1850,6 +1866,23 @@
       this.renderStatusGlyph(group, d, strongest);
       group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", 16).text("(+)")
           .on("click", () => this.toggleClassHeader(d.classId));
+      // Separate from the collaborator expander on purpose: one asks "what does
+      // this class use", this one just gets a class out of the way. A domain
+      // type with twenty accessors is noise once you have seen it.
+      group.append("text").attr("class", COLLAPSE_TOGGLE_CLASS)
+          .attr("x", d.rect.width - 48).attr("y", 16)
+          .text(this.collapsedClassIds.has(d.classId) ? COLLAPSE_GLYPH_CLOSED : COLLAPSE_GLYPH_OPEN)
+          .on("click", () => this.toggleBoxCollapsed(d.classId));
+    }
+
+    /** Collapses a box to its header, or restores it (spec 007 §2.2). */
+    toggleBoxCollapsed(classId) {
+      if (this.collapsedClassIds.has(classId)) {
+        this.collapsedClassIds.delete(classId);
+      } else {
+        this.collapsedClassIds.add(classId);
+      }
+      this.render();
     }
 
     /** The green header fill an `ADDED` box gets, in addition to its solid green border (spec 007 §3). */
@@ -2056,13 +2089,13 @@
      * tie-break ordering within a gap.
      */
     resolveEndpoints(link) {
-      const targetPosition = this.methodRowPositions.get(link.targetMethodId);
+      const targetPosition = this.rowOrHeaderPosition(link.targetMethodId);
       if (!targetPosition) {
         return null;
       }
       const sourcePosition = link.fromPill
           ? this.pillRowPosition()
-          : this.methodRowPositions.get(link.sourceMethodId);
+          : this.rowOrHeaderPosition(link.sourceMethodId);
       if (!sourcePosition) {
         return null;
       }
@@ -2073,6 +2106,30 @@
       // started at 0, so they collided (AC11).
       const gapKey = String(sourcePosition.rect.x + sourcePosition.rect.width);
       return { ...link, source: sourcePosition.classId, target: targetPosition.classId, gapKey, sourcePosition, targetPosition };
+    }
+
+    /**
+     * Where a link should attach for one method: its own row, or the class's
+     * header when the box is collapsed.
+     *
+     * <p>A collapsed box has no rows, so without this every link touching it
+     * would resolve to nothing and disappear — collapsing a class would quietly
+     * delete the relationships that made it worth showing.
+     */
+    rowOrHeaderPosition(methodId) {
+      const row = this.methodRowPositions.get(methodId);
+      if (row) {
+        return row;
+      }
+      const method = this.index.method(methodId);
+      if (!method || !this.collapsedClassIds.has(method.classId) || !this.lastLayout) {
+        return null;
+      }
+      const position = this.lastLayout.boxPositions.get(method.classId);
+      if (!position) {
+        return null;
+      }
+      return { classId: method.classId, rect: position.rect, rowY: position.rect.y + HEADER_HEIGHT / 2 };
     }
 
     /** The pill as a link source: its rect, with the row y at the pill's middle. */

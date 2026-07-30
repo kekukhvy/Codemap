@@ -308,6 +308,20 @@ ul.nav-list a:hover {
   user-select: none;
 }
 
+/* Folds a whole box away to its header (spec 007 §2.2). Deliberately quieter
+   than the accent-coloured expander next to it: expanding reveals new
+   structure, this only tidies away structure already read. */
+.class-box .collapse-toggle {
+  fill: var(--color-muted);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.class-box .collapse-toggle:hover {
+  fill: var(--color-text);
+}
+
 /* Change-status outlines (spec 007 §3). Colour is never the only signal: the
    border style differs too (dashed for AFFECTED) and a status glyph is drawn
    in the header — see `.class-box .status-glyph`. */
