@@ -284,6 +284,13 @@
   }
 
   /**
+   * Joins a parent expander path to the row expanded beneath it. Collapsing a
+   * path also retires everything nested under it, so this separator must not
+   * occur inside a method id.
+   */
+  const PATH_SEPARATOR = ">";
+
+  /**
    * Owns every box and the reference-counted bookkeeping that lets a shared
    * collaborator survive collapsing one of several callers (spec 007 §6.1,
    * §6.2). This class holds no D3/DOM state — it is the model the renderer
@@ -293,6 +300,11 @@
   class DiagramState {
     constructor() {
       this.boxes = new Map();
+    }
+
+    /** Empties the canvas — used when switching to a different entry point. */
+    clear() {
+      this.boxes.clear();
     }
 
     /**
@@ -323,7 +335,7 @@
      */
     collapse(revealingPath) {
       for (const [classId, box] of this.boxes) {
-        box.revealingPaths.delete(revealingPath);
+        this.retirePaths(box.revealingPaths, revealingPath);
         this.forgetPrivateRowsFor(box, revealingPath);
         if (box.revealingPaths.size === 0) {
           this.boxes.delete(classId);
@@ -331,9 +343,27 @@
       }
     }
 
+    /**
+     * Retires `revealingPath` and every path nested beneath it.
+     *
+     * <p>Paths are hierarchical — {@link #methodRowPath} builds them as
+     * `parent > methodId` — so collapsing a row must also retire whatever was
+     * expanded *through* it. Deleting only the exact string would strand every
+     * descendant, leaving boxes on the canvas that no visible expander can ever
+     * remove again.
+     */
+    retirePaths(paths, revealingPath) {
+      const nestedPrefix = revealingPath + PATH_SEPARATOR;
+      for (const path of [...paths]) {
+        if (path === revealingPath || path.startsWith(nestedPrefix)) {
+          paths.delete(path);
+        }
+      }
+    }
+
     forgetPrivateRowsFor(box, revealingPath) {
       for (const paths of box.revealedPrivateRowPaths.values()) {
-        paths.delete(revealingPath);
+        this.retirePaths(paths, revealingPath);
       }
     }
 
@@ -363,7 +393,7 @@
 
   /** The expander path key for a method row's own expansion, scoped by the caller's own reveal path. */
   function methodRowPath(methodId, parentPath) {
-    return parentPath + ">" + methodId;
+    return parentPath + PATH_SEPARATOR + methodId;
   }
 
   /**
@@ -386,7 +416,10 @@
      */
     openEntryPoint(entryPointId) {
       const entryPoint = this.index.data.entryPoints.find((candidate) => candidate.id === entryPointId);
-      const method = this.index.method(entryPoint.methodId);
+      const method = entryPoint && this.index.method(entryPoint.methodId);
+      if (!method) {
+        return null;
+      }
       const box = this.diagram.ensureBox(method.classId, entryPointId);
       return {
         box,
@@ -1078,7 +1111,12 @@
       this.viewport = this.svg.append("g").attr("class", "viewport");
       this.selection = null;
       this.underlinedMethodIds = new Set();
-      this.expandedMethodRows = new Set();
+      /** methodId -> the parent expander path it was expanded under. */
+      this.expandedMethodRows = new Map();
+      /** classIds whose header expander is currently open. */
+      this.expandedClassHeaders = new Set();
+      /** The entry method's underline, which no link owns and cleanup must not drop. */
+      this.entryUnderlinedMethodId = null;
       this.openPillId = null;
       this.hasFittedView = false;
       this.setupZoom();
@@ -1097,35 +1135,64 @@
       this.svg.call(this.zoomBehavior.transform, transform);
     }
 
-    /** Opens an entry-point pill (spec 007 §4.1): draws its class, underlines the handler row. */
+    /**
+     * Opens an entry-point pill (spec 007 §4.1): draws its class, underlines the
+     * handler row.
+     *
+     * <p>Switching entry points clears the canvas first. The previous pill's
+     * boxes are unreachable from the new root, so keeping them would leave a
+     * pile of disconnected rectangles the reader cannot collapse — and they
+     * would be dropped from the layout silently, since a box no link reaches
+     * gets no column.
+     */
     openEntryPointPill(entryPointId) {
+      if (this.openPillId !== entryPointId) {
+        this.resetDiagram();
+      }
       const result = this.controller.openEntryPoint(entryPointId);
+      if (!result) {
+        return null;
+      }
       this.openPillId = entryPointId;
+      this.entryUnderlinedMethodId = result.underlinedMethodId;
       this.underlinedMethodIds.add(result.underlinedMethodId);
       this.render();
       return result;
     }
 
-    /** The class-header `(+)`/`(−)` expander (spec 007 §4.3). */
+    /** Drops every box, expansion, and underline so a new entry point starts clean. */
+    resetDiagram() {
+      this.controller.diagram.clear();
+      this.expandedMethodRows.clear();
+      this.expandedClassHeaders.clear();
+      this.underlinedMethodIds.clear();
+      this.entryUnderlinedMethodId = null;
+      this.selection = null;
+    }
+
+    /**
+     * The class-header `(+)`/`(−)` expander (spec 007 §4.3).
+     *
+     * <p>Held on the view rather than the box: a box is destroyed and recreated
+     * as paths come and go, and losing the flag with it made a reopened header
+     * offer `(+)` while its collaborators were already on the canvas.
+     */
     toggleClassHeader(classId) {
-      const box = this.controller.diagram.boxFor(classId);
-      if (box && box.expandedHeader) {
+      if (this.expandedClassHeaders.has(classId)) {
         this.controller.collapseClassHeader(classId);
-        box.expandedHeader = false;
+        this.expandedClassHeaders.delete(classId);
       } else {
         this.controller.expandClassHeader(classId);
-        const reopened = this.controller.diagram.boxFor(classId);
-        if (reopened) {
-          reopened.expandedHeader = true;
-        }
+        this.expandedClassHeaders.add(classId);
       }
+      this.clearUnderlinesWithoutLinks();
       this.render();
     }
 
     /** The method-row `(+)`/`(−)` expander (spec 007 §4.3). */
     toggleMethodRow(methodId, ownerClassId, parentPath) {
       if (this.expandedMethodRows.has(methodId)) {
-        this.collapseMethodRow(methodId, parentPath);
+        this.collapseMethodRow(methodId);
       } else {
         this.expandMethodRow(methodId, ownerClassId, parentPath);
       }
@@ -1139,13 +1206,38 @@
           this.underlinedMethodIds.add(link.targetMethodId);
         }
       }
-      this.expandedMethodRows.add(methodId);
+      this.expandedMethodRows.set(methodId, parentPath);
       return result;
     }
 
-    collapseMethodRow(methodId, parentPath) {
-      this.controller.collapseMethodRow(methodId, parentPath);
+    /**
+     * Collapses using the path the row was actually expanded under, not one
+     * recomputed from the box's current `revealingPaths` — that set's order
+     * shifts as paths come and go, so recomputing could target a different
+     * path and leave the box unremovable by any later click.
+     */
+    collapseMethodRow(methodId) {
+      const parentPath = this.expandedMethodRows.get(methodId);
       this.expandedMethodRows.delete(methodId);
+      if (parentPath !== undefined) {
+        this.controller.collapseMethodRow(methodId, parentPath);
+      }
+      this.clearUnderlinesWithoutLinks();
+    }
+
+    /** Drops underlines whose link no longer exists, so no row stays marked as a target. */
+    clearUnderlinesWithoutLinks() {
+      const stillTargeted = new Set();
+      for (const link of this.renderableLinks()) {
+        if (link.underlineTarget) {
+          stillTargeted.add(link.targetMethodId);
+        }
+      }
+      if (this.entryUnderlinedMethodId) {
+        stillTargeted.add(this.entryUnderlinedMethodId);
+      }
+      this.underlinedMethodIds = new Set(
+          [...this.underlinedMethodIds].filter((methodId) => stillTargeted.has(methodId)));
     }
 
     /** Clicking a class name (spec 007 §4.2): opens the side panel, never touches the canvas. */
@@ -1173,7 +1265,9 @@
     /** The entry-point pill itself (spec 007 §2.1, §4.1). */
     drawPill(layout) {
       const entryPoint = this.index.data.entryPoints.find((candidate) => candidate.id === this.openPillId);
-      const selection = this.viewport.selectAll("g.entry-point-pill").data([entryPoint], (d) => d.id);
+      const data = entryPoint ? [entryPoint] : [];
+      const selection = this.viewport.selectAll("g.entry-point-pill").data(data, (d) => d.id);
+      selection.exit().remove();
       const entered = selection.enter().append("g").attr("class", "entry-point-pill");
       entered.append("rect").attr("width", PILL_WIDTH).attr("height", PILL_HEIGHT);
       entered.append("text").attr("x", 12).attr("y", PILL_HEIGHT / 2 + 4);
@@ -1306,7 +1400,7 @@
     renderableLinks() {
       const links = [];
       const seenIds = new Set();
-      for (const methodId of this.expandedMethodRows) {
+      for (const methodId of this.expandedMethodRows.keys()) {
         const method = this.index.method(methodId);
         if (!method) {
           continue;
@@ -1368,8 +1462,9 @@
 
     /** Highlights (or un-highlights) one member row, identified by the method it renders, across every box. */
     setRowHovered(methodId, hovered) {
+      // `nodes` holds raw DOM elements — `getAttribute`, not D3's `.attr()`.
       this.viewport.selectAll("text.member-row")
-          .filter((d, i, nodes) => nodes[i].attr(MEMBER_ROW_METHOD_ID_ATTRIBUTE) === methodId)
+          .filter((d, i, nodes) => nodes[i].getAttribute(MEMBER_ROW_METHOD_ID_ATTRIBUTE) === methodId)
           .classed(HOVERED_CSS_CLASS, hovered);
     }
 

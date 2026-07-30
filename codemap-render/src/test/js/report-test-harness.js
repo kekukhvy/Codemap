@@ -108,6 +108,16 @@ function joinableNode(tag) {
       attributes.set(name, typeof value === "function" ? value(node.datum) : value);
       return node;
     },
+    // A real DOM element exposes getAttribute/setAttribute, NOT D3's .attr().
+    // report.js receives raw elements in a `.filter((d, i, nodes) => …)`
+    // callback, so the stub must not offer .attr() as the only way in — that
+    // masked a TypeError that fired on every hover in a real browser.
+    getAttribute(name) {
+      return attributes.has(name) ? attributes.get(name) : null;
+    },
+    setAttribute(name, value) {
+      attributes.set(name, value);
+    },
     getAttribute: (name) => (attributes.has(name) ? attributes.get(name) : null),
     text(value) {
       if (value === undefined) {
