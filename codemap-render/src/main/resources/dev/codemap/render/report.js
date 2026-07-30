@@ -157,6 +157,12 @@
   const HEADER_CONTROL_INSET = 22;
   /** Spacing between header controls, wide enough that their hit areas do not overlap. */
   const HEADER_CONTROL_PITCH = 26;
+  const HEADER_HIT_AREA_CLASS = "header-hit-area";
+  /** Padding either side of a header glyph that still counts as a click on it. */
+  const HEADER_HIT_PAD_X = 5;
+  const HEADER_HIT_HEIGHT = 22;
+  /** Text sits above its baseline, so the hit area is lifted by roughly half a cap height. */
+  const HEADER_HIT_BASELINE_DROP = 4;
   const COLLAPSE_TOGGLE_CLASS = "collapse-toggle";
   /** Shown when the box is open — clicking it folds the box away. */
   const COLLAPSE_GLYPH_OPEN = "(−)";
@@ -2059,16 +2065,14 @@
       // control. At a fixed 16px pitch the glyph, the expander and the fold
       // control overlapped, so the fold control could not reliably be clicked.
       let cursorX = d.rect.width - HEADER_CONTROL_INSET;
-      group.append("text").attr("class", "expander").attr("x", cursorX).attr("y", 16).text("(+)")
-          .on("click", () => this.toggleClassHeader(d.classId));
+      this.renderHeaderControl(group, cursorX, "expander", "(+)", () => this.toggleClassHeader(d.classId));
       cursorX -= HEADER_CONTROL_PITCH;
       // Separate from the collaborator expander on purpose: one asks "what does
       // this class use", this one just gets a class out of the way. A domain
       // type with twenty accessors is noise once you have seen it.
-      group.append("text").attr("class", COLLAPSE_TOGGLE_CLASS)
-          .attr("x", cursorX).attr("y", 16)
-          .text(this.collapsedClassIds.has(d.classId) ? COLLAPSE_GLYPH_CLOSED : COLLAPSE_GLYPH_OPEN)
-          .on("click", () => this.toggleBoxCollapsed(d.classId));
+      const foldGlyph = this.collapsedClassIds.has(d.classId) ? COLLAPSE_GLYPH_CLOSED : COLLAPSE_GLYPH_OPEN;
+      this.renderHeaderControl(group, cursorX, COLLAPSE_TOGGLE_CLASS, foldGlyph,
+          () => this.toggleBoxCollapsed(d.classId));
       cursorX -= HEADER_CONTROL_PITCH;
       this.renderStatusGlyph(group, d, strongest, cursorX);
     }
@@ -2081,6 +2085,26 @@
         this.collapsedClassIds.add(classId);
       }
       this.render();
+    }
+
+    /**
+     * One header control: the glyph plus an invisible hit area behind it.
+     *
+     * <p>The glyph alone is about 16x13 — a small target to hit, and missing it
+     * silently does nothing, which reads as the control being broken. The pad
+     * makes the clickable area the size a pointer actually expects without
+     * changing how the header looks.
+     */
+    renderHeaderControl(group, x, cssClass, glyph, onClick) {
+      group.append("rect")
+          .attr("class", HEADER_HIT_AREA_CLASS)
+          .attr("x", x - HEADER_HIT_PAD_X)
+          .attr("y", 16 - HEADER_HIT_HEIGHT / 2 - HEADER_HIT_BASELINE_DROP)
+          .attr("width", HEADER_CONTROL_PITCH)
+          .attr("height", HEADER_HIT_HEIGHT)
+          .on("click", onClick);
+      group.append("text").attr("class", cssClass).attr("x", x).attr("y", 16).text(glyph)
+          .on("click", onClick);
     }
 
     /** The green header fill an `ADDED` box gets, in addition to its solid green border (spec 007 §3). */

@@ -110,6 +110,43 @@ class CallGraphBuilderTest {
                 assertThat(edge.resolved()).isTrue();
             });
         }
+
+        @Test
+        @DisplayName("keeps a call whose argument the solver cannot type-check")
+        void unresolvableArgumentDoesNotLoseTheWholeCall() throws IOException {
+            writeClass("TaskHandler", """
+                    package com.example;
+
+                    public class TaskHandler {
+                        private final UpdateTaskUseCase updateTaskUseCase;
+
+                        public TaskHandler(UpdateTaskUseCase updateTaskUseCase) {
+                            this.updateTaskUseCase = updateTaskUseCase;
+                        }
+
+                        public void update() {
+                            this.updateTaskUseCase.execute("id",
+                                    unknownHelper(somethingElse()));
+                        }
+                    }
+                    """);
+            writeClass("UpdateTaskUseCase", """
+                    package com.example;
+
+                    public class UpdateTaskUseCase {
+                        public void execute(String id, String payload) {
+                        }
+                    }
+                    """);
+
+            List<CallEdge> edges = buildEdges();
+
+            assertThat(edges).anySatisfy(edge -> {
+                assertThat(edge.from()).isEqualTo("com.example.TaskHandler#update()");
+                assertThat(edge.to()).isEqualTo("com.example.UpdateTaskUseCase#execute(String, String)");
+                assertThat(edge.resolved()).isTrue();
+            });
+        }
     }
 
     @Nested

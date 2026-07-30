@@ -318,6 +318,14 @@ ul.nav-list a:hover {
   user-select: none;
 }
 
+/* An invisible, finger-sized target behind each header glyph. The glyph itself
+   is ~16x13; missing it silently does nothing, which reads as a broken
+   control. */
+.class-box .header-hit-area {
+  fill: transparent;
+  cursor: pointer;
+}
+
 .class-box .collapse-toggle:hover {
   fill: var(--color-text);
 }

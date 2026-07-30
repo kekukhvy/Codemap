@@ -6,6 +6,7 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
+import com.github.javaparser.resolution.declarations.ResolvedReferenceTypeDeclaration;
 import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.EdgeKind;
 import dev.codemap.core.parse.MethodOwner;
@@ -99,7 +100,8 @@ final class CallExpressionResolver {
         Optional<ResolvedMethodDeclaration> resolved = tryResolve(call);
 
         if (resolved.isEmpty()) {
-            return degradedEdge(call, fromId, line);
+            Optional<CallEdge> viaReceiver = edgeViaReceiverType(call, fromId, fromClassId, projectClassIds, line);
+            return viaReceiver.isPresent() ? viaReceiver : degradedEdge(call, fromId, line);
         }
 
         ResolvedMethodDeclaration target = resolved.get();
@@ -135,6 +137,77 @@ final class CallExpressionResolver {
         }
         return Optional.of(
                 new CallEdge(fromId, call.getNameAsString(), EdgeKind.CALL_EXTERNAL, false, line, null, null));
+    }
+
+    /**
+     * Recovers a call the solver could not resolve outright by identifying only
+     * the receiver's type.
+     *
+     * <p>Overload resolution needs every argument to type-check, so one
+     * unresolvable argument — a helper the solver cannot see, a library type
+     * whose jar is absent — loses the whole call. That is how
+     * {@code useCase.execute(id, jsonToString(...))} vanished from the map while
+     * the four single-argument calls beside it resolved perfectly: the reader
+     * sees a handler that apparently never calls its use case.
+     *
+     * <p>Resolving the receiver alone is much weaker and needs no arguments. When
+     * it names an indexed class holding exactly one method of that name, the
+     * target is unambiguous and the edge is honest. With overloads it stays
+     * ambiguous, so nothing is recorded rather than guessing wrong.
+     */
+    private Optional<CallEdge> edgeViaReceiverType(
+            MethodCallExpr call, String fromId, String fromClassId, Set<String> projectClassIds, int line) {
+
+        Optional<ResolvedReferenceTypeDeclaration> receiver = receiverTypeOf(call);
+        if (receiver.isEmpty()) {
+            return Optional.empty();
+        }
+        String toClassId = receiver.get().getQualifiedName();
+        if (!projectClassIds.contains(toClassId)) {
+            return Optional.empty();
+        }
+
+        List<ResolvedMethodDeclaration> named;
+        try {
+            named = receiver.get().getDeclaredMethods().stream()
+                    .filter(method -> method.getName().equals(call.getNameAsString()))
+                    .toList();
+        } catch (RuntimeException e) {
+            log.debug("Could not list methods of {} at line {}: {}", toClassId, line, e.getMessage());
+            return Optional.empty();
+        }
+        if (named.size() != 1) {
+            // No candidates, or several overloads: without argument types there is
+            // no honest way to choose, so record nothing rather than guess.
+            return Optional.empty();
+        }
+
+        EdgeKind kind = toClassId.equals(fromClassId) ? EdgeKind.CALL_INTERNAL : EdgeKind.CALL_EXTERNAL;
+        String toId;
+        try {
+            // Building the id renders each parameter type, which can itself fail
+            // for the same reason the call did — this is a recovery path, so a
+            // failure here must degrade, not propagate.
+            toId = ResolvedMethodIds.idOf(named.get(0));
+        } catch (RuntimeException e) {
+            log.debug("Could not name the recovered target of {} at line {}: {}",
+                    call.getNameAsString(), line, e.getMessage());
+            return Optional.empty();
+        }
+        log.debug("Recovered call {} on {} at line {} via its receiver type",
+                call.getNameAsString(), toClassId, line);
+        return Optional.of(new CallEdge(fromId, toId, kind, true, line, null, null));
+    }
+
+    /** The declared type of a call's receiver, when the solver can name it. */
+    private Optional<ResolvedReferenceTypeDeclaration> receiverTypeOf(MethodCallExpr call) {
+        return call.getScope().flatMap(scope -> {
+            try {
+                return scope.calculateResolvedType().asReferenceType().getTypeDeclaration();
+            } catch (RuntimeException e) {
+                return Optional.empty();
+            }
+        });
     }
 
     private Optional<ResolvedMethodDeclaration> tryResolve(MethodCallExpr call) {

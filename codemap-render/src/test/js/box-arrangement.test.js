@@ -69,6 +69,7 @@ function run() {
   testACollapsedBoxCanBeReopened();
   testDroppingOnANeighbourPushesItOutOfTheWay();
   testRoutesKeepClearOfBoxBordersWhenThereIsRoom();
+  testHeaderControlsHaveAFingerSizedHitArea();
 
   console.log("box-arrangement.test.js: all assertions passed");
 }
@@ -237,6 +238,28 @@ function testRoutesKeepClearOfBoxBordersWhenThereIsRoom() {
       assert.ok(Math.max(outsideX, outsideY) >= 6,
           `a turn at (${point.x},${point.y}) hugs the blocker's border`);
     }
+  }
+}
+
+/**
+ * The glyphs are about 16x13 — a small target, and missing one silently does
+ * nothing, which reads as the control being broken. Each carries an invisible
+ * hit area so the clickable region is the size a pointer expects.
+ */
+function testHeaderControlsHaveAFingerSizedHitArea() {
+  const view = openedView();
+  const box = view.viewport.nodes[0].children
+      .find((node) => (node.getAttribute("class") || "").includes("class-box"));
+
+  const hitAreas = box.children.filter((child) =>
+      (child.getAttribute("class") || "").split(" ").includes("header-hit-area"));
+
+  assert.ok(hitAreas.length >= 2, "the expander and the fold control each need a hit area");
+  for (const area of hitAreas) {
+    assert.ok(Number(area.getAttribute("width")) >= 24,
+        "a hit area must be wider than the glyph it stands behind");
+    assert.ok(Number(area.getAttribute("height")) >= 20,
+        "a hit area must be taller than the glyph it stands behind");
   }
 }
 
