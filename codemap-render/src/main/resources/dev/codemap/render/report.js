@@ -153,6 +153,10 @@
   const STATUS_GLYPH_CLASS = "status-glyph";
   /** The compartment set a collapsed box renders with: none at all. */
   const EMPTY_COMPARTMENTS = { constructors: [], publicMethods: [], revealedPrivateMethods: [] };
+  /** Gap from the box's right edge to the first header control. */
+  const HEADER_CONTROL_INSET = 22;
+  /** Spacing between header controls, wide enough that their hit areas do not overlap. */
+  const HEADER_CONTROL_PITCH = 26;
   const COLLAPSE_TOGGLE_CLASS = "collapse-toggle";
   /** Shown when the box is open — clicking it folds the box away. */
   const COLLAPSE_GLYPH_OPEN = "(−)";
@@ -878,6 +882,40 @@
     return occupied;
   }
 
+  /**
+   * Collapses parallel links into one per class pair wherever an end sits on a
+   * collapsed box's header.
+   *
+   * <p>Once a box is folded, every link into it lands on the same header point.
+   * Drawing ten of them stacks ten arrowheads on one spot — visual noise that
+   * says nothing the single line does not. Between two open boxes each call
+   * still gets its own line, because there the rows they join are distinct.
+   */
+  function mergeLinksIntoCollapsedBoxes(links) {
+    const merged = new Map();
+    const kept = [];
+    for (const link of links) {
+      const collapsedEnd = link.sourcePosition.atHeader || link.targetPosition.atHeader;
+      if (!collapsedEnd) {
+        kept.push(link);
+        continue;
+      }
+      const pairKey = link.sourcePosition.classId + "=>" + link.targetPosition.classId;
+      const existing = merged.get(pairKey);
+      if (!existing) {
+        merged.set(pairKey, link);
+        kept.push(link);
+        continue;
+      }
+      // A dashed private call folded together with a solid public one reads as
+      // the weaker claim, so the merged line keeps the solid style.
+      if (link.style === LINK_STYLE.SOLID) {
+        existing.style = LINK_STYLE.SOLID;
+      }
+    }
+    return kept;
+  }
+
   /** Segment key used both to reserve a segment and to detect reuse of one. */
   function segmentKey(a, b) {
     const ends = [[Math.round(a.x), Math.round(a.y)], [Math.round(b.x), Math.round(b.y)]]
@@ -1449,6 +1487,8 @@
   /** Row text starts here; the expander needs this much clear on the right. */
   const ROW_TEXT_X = 12;
   const ROW_EXPANDER_RESERVE = 30;
+  /** Room the header keeps for its status glyph, fold control and expander. */
+  const HEADER_CONTROLS_RESERVE = 96;
   const ELLIPSIS = "…";
   const COLUMN_GAP = 90;
   const ROW_HEIGHT = 20;
@@ -1515,10 +1555,13 @@
    */
   function boxWidthFor(compartments, className) {
     const rows = [...compartments.constructors, ...compartments.publicMethods, ...compartments.revealedPrivateMethods];
-    const longest = rows.reduce((widest, method) => Math.max(widest, fullMemberRowLabel(method).length),
-        (className || "").length);
+    const longest = rows.reduce((widest, method) => Math.max(widest, fullMemberRowLabel(method).length), 0);
     const needed = ROW_TEXT_X + longest * CHAR_WIDTH + ROW_EXPANDER_RESERVE;
-    return Math.round(Math.min(BOX_MAX_WIDTH, Math.max(BOX_WIDTH, needed)));
+    // The header has to fit too: the class name plus room for its three
+    // controls. A collapsed box has no rows at all, so this is the only thing
+    // keeping its name from running under the controls.
+    const headerNeeded = ROW_TEXT_X + (className || "").length * CHAR_WIDTH + HEADER_CONTROLS_RESERVE;
+    return Math.round(Math.min(BOX_MAX_WIDTH, Math.max(BOX_WIDTH, needed, headerNeeded)));
   }
 
   /** The pixel height a box needs for its current compartments (spec 007 §2.2). */
@@ -1564,6 +1607,28 @@
     }
     const pillRect = { x: ROOT_MARGIN_X, y: ROOT_MARGIN_Y, width: PILL_WIDTH, height: PILL_HEIGHT };
     return { boxPositions, pillRect };
+  }
+
+  /**
+   * Shifts each box by whatever the reader has dragged it, leaving the computed
+   * layout itself untouched.
+   *
+   * <p>Applied after layout rather than baked into it, so the columns keep their
+   * own logic — a dragged box does not push its neighbours around, and clearing
+   * the offset puts it straight back where the layout wanted it.
+   */
+  function applyBoxOffsets(layout, offsets) {
+    if (!offsets || offsets.size === 0) {
+      return layout;
+    }
+    const moved = new Map();
+    for (const [classId, position] of layout.boxPositions) {
+      const offset = offsets.get(classId);
+      moved.set(classId, offset
+          ? { ...position, rect: { ...position.rect, x: position.rect.x + offset.x, y: position.rect.y + offset.y } }
+          : position);
+    }
+    return { ...layout, boxPositions: moved };
   }
 
   /** The synthetic pill -> declaring-class link that seeds column 0 -> column 1 (spec 007 §4.1). */
@@ -1650,6 +1715,9 @@
       this.expandedClassHeaders = new Set();
       /** classIds the reader has collapsed down to just their header. */
       this.collapsedClassIds = new Set();
+      /** classId -> the offset the reader has dragged that box by. */
+      this.boxOffsets = new Map();
+      this.dragOrigin = null;
       /** The entry method's underline, which no link owns and cleanup must not drop. */
       this.entryUnderlinedMethodId = null;
       this.openPillId = null;
@@ -1701,6 +1769,7 @@
       this.expandedMethodRows.clear();
       this.expandedClassHeaders.clear();
       this.collapsedClassIds.clear();
+      this.boxOffsets.clear();
       this.underlinedMethodIds.clear();
       this.entryUnderlinedMethodId = null;
       this.selection = null;
@@ -1792,7 +1861,9 @@
       if (!this.openPillId) {
         return;
       }
-      this.lastLayout = layoutDiagram(this.controller.diagram, this.index, this.openPillId, this.collapsedClassIds);
+      this.lastLayout = applyBoxOffsets(
+          layoutDiagram(this.controller.diagram, this.index, this.openPillId, this.collapsedClassIds),
+          this.boxOffsets);
       this.drawPill(this.lastLayout);
       this.drawBoxes(this.lastLayout);
       this.drawLinks();
@@ -1826,6 +1897,40 @@
       merged.attr("transform", (d) => "translate(" + d.rect.x + "," + d.rect.y + ")");
       merged.attr("class", (d) => this.classBoxCssClasses(d).join(" "));
       merged.each((d, i, nodes) => this.renderBoxContent(nodes[i], d));
+      this.makeBoxesDraggable(merged);
+    }
+
+    /**
+     * Lets the reader drag a box wherever they want it.
+     *
+     * <p>The automatic layout is a starting point, not a verdict — sometimes you
+     * simply want two classes side by side to compare them. The offset is
+     * remembered per class and re-applied on every layout, so expanding
+     * something else does not undo the arrangement, and links re-route live as
+     * the box moves.
+     */
+    makeBoxesDraggable(selection) {
+      if (!d3.drag) {
+        return;
+      }
+      const view = this;
+      selection.call(d3.drag()
+          .on("start", function (event, d) {
+            view.dragOrigin = { x: event.x, y: event.y, offset: view.boxOffsets.get(d.classId) || { x: 0, y: 0 } };
+          })
+          .on("drag", function (event, d) {
+            if (!view.dragOrigin) {
+              return;
+            }
+            view.boxOffsets.set(d.classId, {
+              x: view.dragOrigin.offset.x + (event.x - view.dragOrigin.x),
+              y: view.dragOrigin.offset.y + (event.y - view.dragOrigin.y)
+            });
+            view.render();
+          })
+          .on("end", () => {
+            view.dragOrigin = null;
+          }));
     }
 
     classBoxCssClasses(d) {
@@ -1863,16 +1968,22 @@
       const header = group.append("text").attr("class", "box-header").attr("x", 8).attr("y", 22)
           .text((owningClass ? owningClass.simpleName : d.classId));
       header.on("click", () => this.navigateToClass(d.classId));
-      this.renderStatusGlyph(group, d, strongest);
-      group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", 16).text("(+)")
+      // Laid out right-to-left from the box edge with a real gap between each
+      // control. At a fixed 16px pitch the glyph, the expander and the fold
+      // control overlapped, so the fold control could not reliably be clicked.
+      let cursorX = d.rect.width - HEADER_CONTROL_INSET;
+      group.append("text").attr("class", "expander").attr("x", cursorX).attr("y", 16).text("(+)")
           .on("click", () => this.toggleClassHeader(d.classId));
+      cursorX -= HEADER_CONTROL_PITCH;
       // Separate from the collaborator expander on purpose: one asks "what does
       // this class use", this one just gets a class out of the way. A domain
       // type with twenty accessors is noise once you have seen it.
       group.append("text").attr("class", COLLAPSE_TOGGLE_CLASS)
-          .attr("x", d.rect.width - 48).attr("y", 16)
+          .attr("x", cursorX).attr("y", 16)
           .text(this.collapsedClassIds.has(d.classId) ? COLLAPSE_GLYPH_CLOSED : COLLAPSE_GLYPH_OPEN)
           .on("click", () => this.toggleBoxCollapsed(d.classId));
+      cursorX -= HEADER_CONTROL_PITCH;
+      this.renderStatusGlyph(group, d, strongest, cursorX);
     }
 
     /** Collapses a box to its header, or restores it (spec 007 §2.2). */
@@ -1894,13 +2005,13 @@
     }
 
     /** The header status glyph, the colour-independent signal for the box's status (spec 007 §3). */
-    renderStatusGlyph(group, d, strongest) {
+    renderStatusGlyph(group, d, strongest, x) {
       const glyph = statusGlyph(strongest);
       if (!glyph) {
         return;
       }
       group.append("text").attr("class", STATUS_GLYPH_CLASS + " " + glyph.cssClass)
-          .attr("x", d.rect.width - 32).attr("y", 16).text(glyph.symbol);
+          .attr("x", x).attr("y", 16).text(glyph.symbol);
     }
 
     renderCompartmentRows(group, d) {
@@ -2043,7 +2154,8 @@
     }
 
     drawLinks() {
-      const routable = this.renderableLinks().map((link) => this.resolveEndpoints(link)).filter((link) => link !== null);
+      const resolved = this.renderableLinks().map((link) => this.resolveEndpoints(link)).filter((link) => link !== null);
+      const routable = mergeLinksIntoCollapsedBoxes(resolved);
       const lanes = assignLanesByGap(routable, (link) => link.gapKey);
       const links = this.routeAllLinks(routable, lanes);
       const selection = this.viewport.selectAll("path.class-link").data(links, (d) => d.id);
@@ -2129,7 +2241,12 @@
       if (!position) {
         return null;
       }
-      return { classId: method.classId, rect: position.rect, rowY: position.rect.y + HEADER_HEIGHT / 2 };
+      return {
+        classId: method.classId,
+        rect: position.rect,
+        rowY: position.rect.y + HEADER_HEIGHT / 2,
+        atHeader: true
+      };
     }
 
     /** The pill as a link source: its rect, with the row y at the pill's middle. */
@@ -2431,6 +2548,8 @@
     routeOrthogonalLink,
     polylinePath,
     allocateLanes,
+    applyBoxOffsets,
+    mergeLinksIntoCollapsedBoxes,
     reserveTraversedSegments,
     searchCorridorPath,
     assignLanesByGap,

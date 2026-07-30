@@ -322,6 +322,13 @@ ul.nav-list a:hover {
   fill: var(--color-text);
 }
 
+/* The box is draggable (spec 007 §6.3): the automatic layout is a starting
+   point, not a verdict. The header is the grab handle — rows keep their own
+   pointer cursor so clicking a method still reads as a click. */
+.class-box .box-rect {
+  cursor: move;
+}
+
 /* Change-status outlines (spec 007 §3). Colour is never the only signal: the
    border style differs too (dashed for AFFECTED) and a status glyph is drawn
    in the header — see `.class-box .status-glyph`. */
