@@ -1,4 +1,34 @@
 // Rendering: index.json -> a self-contained report.html.
 dependencies {
     implementation project(':codemap-core')
+    implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    implementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:${jacksonVersion}"
+}
+
+// Small, dependency-free Node smoke tests for the interactive report's JS:
+// tree-building (spec §3.1: lazy expansion, the revisit rule, cycle
+// termination), tree layout (minimum sibling spacing, sane coordinate
+// bounds), and the initial viewport transform. This is the part of the
+// module Java tests cannot exercise directly. A missing `node` binary
+// degrades to a warning (optional tooling, matching the project's "degrade,
+// don't fail" rule); a genuine assertion failure in a script still fails the
+// build, since that is a real regression rather than an absent dependency.
+tasks.register('jsReportTests', Exec) {
+    group = 'verification'
+    description = 'Runs the Node smoke tests for the report\'s interactive JS.'
+    workingDir = projectDir
+    commandLine 'sh', '-c', '''
+        if ! command -v node >/dev/null 2>&1; then
+          echo "jsReportTests: node is not on PATH; skipping these optional checks." >&2
+          exit 0
+        fi
+        set -e
+        for test_file in src/test/js/*.test.js; do
+          node "$test_file"
+        done
+    '''
+}
+
+tasks.named('test') {
+    dependsOn tasks.named('jsReportTests')
 }

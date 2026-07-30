@@ -1,0 +1,362 @@
+/* Dark is the default and original palette (no [data-theme] attribute yet, or
+   explicitly "dark"). Every colour in the report comes from these custom
+   properties — switching the `data-theme` attribute on <html> is the only
+   thing report.js does; no rule below is rewritten per theme. */
+:root,
+:root[data-theme="dark"] {
+  --color-bg: #0f1115;
+  --color-panel: #171a21;
+  --color-border: #2a2e38;
+  --color-text: #e6e8ee;
+  --color-muted: #9aa1b1;
+  --color-accent: #5b9dff;
+  --color-added: #37b26c;
+  --color-changed: #37b26c;
+  --color-removed: #e0525a;
+  --color-affected: #d9a441;
+  --color-cross-module: #b06fe0;
+  --color-link-internal: #6b7280;
+  --color-link-external: #9aa1b1;
+  --color-focused-fill: #234a7a;
+}
+
+/* Light theme. Every variable the dark palette defines is redefined here
+   (stylesheet.test.js asserts the two lists of custom properties match), and
+   the change-overlay / edge colours are darkened relative to their dark-mode
+   values so they stay legible against a light background instead of washing
+   out. */
+:root[data-theme="light"] {
+  --color-bg: #f5f6f8;
+  --color-panel: #ffffff;
+  --color-border: #d3d7e0;
+  --color-text: #1b1e27;
+  --color-muted: #5b6272;
+  --color-accent: #1c5fd6;
+  --color-added: #1f7a45;
+  --color-changed: #1f7a45;
+  --color-removed: #b3222b;
+  --color-affected: #92640a;
+  --color-cross-module: #7a3fa6;
+  --color-link-internal: #7a8296;
+  --color-link-external: #4b5262;
+  --color-focused-fill: #dbe8ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+
+header {
+  grid-column: 1 / span 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+
+header h1 {
+  font-size: 15px;
+  margin: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+header .controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+header input[type="search"],
+header select {
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+header button {
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+header button:hover,
+header button.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+#canvas-wrapper {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+#graph {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#side-panel {
+  border-left: 1px solid var(--color-border);
+  background: var(--color-panel);
+  overflow-y: auto;
+  padding: 16px;
+}
+
+#side-panel:empty::before,
+#side-panel .placeholder {
+  content: "Select a node to see details.";
+  color: var(--color-muted);
+}
+
+.panel-section {
+  margin-bottom: 16px;
+}
+
+.panel-section h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  margin: 0 0 6px 0;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-right: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.badge-layer {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.badge-module {
+  color: var(--color-muted);
+}
+
+pre.source {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 10px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
+ul.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul.nav-list li {
+  padding: 4px 0;
+}
+
+ul.nav-list a {
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+ul.nav-list a:hover {
+  text-decoration: underline;
+}
+
+.node circle {
+  fill: var(--color-panel);
+  stroke: var(--color-border);
+  stroke-width: 1.5px;
+  cursor: pointer;
+}
+
+/* Node status outlines (spec §5).
+
+   These must come *after* the plain `.node circle` rule above. Both selectors
+   have the same specificity, so source order alone decides the winner — with
+   the status rules first, the neutral grey stroke overrode every one of them
+   and the change overlay silently disappeared.
+
+   `added` and `changed` deliberately share one green outline: the spec treats
+   both as "this is new work", so there is no second selector for `added`. */
+.node-changed > circle {
+  stroke: var(--color-added);
+  stroke-width: 2.5px;
+}
+
+.node-removed > circle {
+  stroke: var(--color-removed);
+  stroke-width: 2.5px;
+  stroke-dasharray: 3 2;
+}
+
+.node-affected > circle {
+  stroke: var(--color-affected);
+  stroke-width: 2.5px;
+}
+
+.node-removed text {
+  text-decoration: line-through;
+}
+
+/* The method a class card exists to draw attention to (spec §3.2.1 CLASS
+   nodes) — filled rather than merely outlined, so it reads as "this one" at
+   a glance among a class's other declared methods. Declared after the plain
+   `.node circle` rule for the same cascade-ordering reason as the status
+   rules above. */
+.node-focused > circle {
+  fill: var(--color-focused-fill);
+  stroke: var(--color-accent);
+  stroke-width: 2px;
+}
+
+/* The label is the part of a node a reader actually aims at — a 6px circle is
+   a hard target, and a method label is often 200px wide. Both must respond, so
+   the label deliberately keeps pointer events rather than deferring to the
+   circle. */
+.node text {
+  fill: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.node.selected > circle {
+  stroke: var(--color-accent);
+  stroke-width: 3px;
+}
+
+/* A revisited node (spec §3.1) carries its "↗ already above" marker inside its
+   own label, so the whole node is dimmed rather than a separate badge element
+   being styled — clicking it jumps to the original occurrence. */
+.node-revisit > text {
+  fill: var(--color-muted);
+  font-style: italic;
+}
+
+.node-revisit > circle {
+  fill: none;
+  stroke: var(--color-muted);
+  stroke-dasharray: 2 2;
+}
+
+/* Edge kinds (spec §3.3) */
+.link {
+  fill: none;
+}
+
+/* The connector from a CLASS node to the one method shown beneath it
+   (entry point -> class -> handler, or a cross-class call -> class ->
+   callee) — not a call edge in its own right, so it stays visually quieter
+   than every real EdgeKind below. */
+.link-class-member {
+  stroke: var(--color-border);
+  stroke-width: 1px;
+}
+
+.link-call-internal {
+  stroke: var(--color-link-internal);
+  stroke-dasharray: 4 3;
+  stroke-width: 1.2px;
+}
+
+.link-call-external {
+  stroke: var(--color-link-external);
+  stroke-width: 1.4px;
+}
+
+.link-cross-module {
+  stroke: var(--color-cross-module);
+  stroke-width: 3px;
+}
+
+.link-uses-type {
+  stroke: var(--color-border);
+  stroke-width: 1px;
+}
+
+.link-implements {
+  stroke: var(--color-border);
+  stroke-width: 1.2px;
+  stroke-dasharray: 1 3;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Module overview (spec §3.2.2, §3.5): a small floating panel, hidden until
+   its header button is toggled, listing "which module depends on which"
+   from the real aggregated CROSS_MODULE edges. */
+.module-overview-panel {
+  display: none;
+  position: absolute;
+  top: 52px;
+  right: 396px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.module-overview-panel.visible {
+  display: block;
+}
+
+.module-overview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.module-overview-list li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.module-overview-list li:last-child {
+  border-bottom: none;
+}

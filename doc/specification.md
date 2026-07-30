@@ -87,6 +87,14 @@ This single decision resolves three problems at once:
 current branch, it renders collapsed with an `↗ already above` badge linking to
 the original occurrence. The cycle terminates and the identity stays visible.
 
+**Tree layout direction.** The rendered tree grows left-to-right: depth advances
+horizontally along the x-axis, and siblings stack vertically along the y-axis.
+This layout is chosen because Java identifiers are long and a label is always
+drawn to the right of its node: stacking siblings vertically means two labels can
+only collide if they are closer than a line's height, whereas a top-down layout
+must space siblings by label *width*, which is unbounded. It is an implementation
+choice and does not constrain §3.1's requirement that the tree grow on expansion.
+
 ### 3.2 Node kinds
 
 | Kind | Meaning |
@@ -437,7 +445,7 @@ its own module so that the default path carries no AI dependency at all.
 | CLI | picocli | Standard, annotation-driven |
 | JSON | Jackson | Index serialisation |
 | Config | SnakeYAML | `codemap.yml` |
-| Rendering | D3.js via CDN, inlined | Collapsible tree, no build step |
+| Rendering | D3.js v7.9.0 vendored, inlined | Collapsible tree, no CDN dependency |
 | Build | Gradle, fat JAR | Single-artifact distribution |
 
 **No Spring.** Codemap is a short-lived CLI process: start, analyse, write, exit.
@@ -521,13 +529,37 @@ dropped and reported as unresolved.
 
 ### 6.6 Report
 
-`report.html` is a single self-contained file: inlined CSS, inlined JavaScript,
-D3 vendored inline, and the index embedded as JSON. It must render over `file://`
-with no server and no network access, so it can be copied or attached to a review
-and still work.
+`report.html` is a single self-contained file that must work over `file://` with
+no server and no network access, so it can be copied or attached to a review and
+still work.
 
-Method source is embedded in the index rather than read at view time, since the
-browser cannot read local files under `file://`.
+**Page structure.** The HTML carries three inline `<script>` elements:
+
+1. The vendored D3 v7.9.0 bundle (inlined from `codemap-render` resources)
+2. An assignment of the escaped view model to `window.__CODEMAP_DATA__`
+3. The interactive report script that populates the UI and wires up navigation
+
+CSS is similarly inlined. Method source is embedded in the index rather than read
+at view time, since the browser cannot read local files under `file://`.
+
+**Security model.** The page declares a Content-Security-Policy of
+`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'`.
+Inline script and style must be allowed — the whole point of the report is that
+it carries its own — but all network access is denied by the browser itself. This
+enforces the self-containment invariant at runtime rather than relying on
+convention alone, and means that even if an escaping bug let untrusted markup out,
+it could not reach the network to exfiltrate the source text the report embeds.
+
+**Escaping embedded source.** The index embeds untrusted Java source text (method
+bodies, comments, javadoc) into a `<script>` element as part of a JSON object.
+Characters `<`, `>`, `&`, U+2028 (line separator), and U+2029 (paragraph
+separator) are escaped as JSON `\uXXXX` escapes. This is character-level escaping
+of the *characters themselves*, not sequence matching, because the HTML tokenizer
+ends a script element on `</script` followed by whitespace, `/`, or `>`,
+case-insensitively — so `</script foo>`, `</SCRIPT>`, and `</script/>` all
+terminate the element, and attempting to match any one literal is bypassable.
+Every replacement is itself valid JSON, so the source text remains parseable and
+round-trips losslessly.
 
 ---
 
