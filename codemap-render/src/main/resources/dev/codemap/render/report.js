@@ -740,9 +740,12 @@
    */
   function searchCorridorPath(link, obstacles, reserved) {
     const start = { x: link.from.rect.x + link.from.rect.width, y: link.from.rowY };
+    // The endpoint boxes are solid walls, not walls with a slot at the
+    // attachment row: a slot let a path enter one side and come out the other,
+    // sweeping the whole box on the way. The path starts on the source's edge
+    // and finishes on the target's, so it never needs to be inside either.
     const walls = obstacles
-        .concat(splitAroundRow(link.from.rect, link.from.rowY))
-        .concat(splitAroundRow(link.to.rect, link.to.rowY));
+        .concat([{ rect: link.from.rect }, { rect: link.to.rect }]);
 
     // Both target edges are viable; the search picks whichever is cheaper, which
     // is how forward, same-column and backward links stay one code path.
@@ -1972,7 +1975,8 @@
       merged.attr("transform", (d) => "translate(" + d.rect.x + "," + d.rect.y + ")");
       merged.attr("class", (d) => this.classBoxCssClasses(d).join(" "));
       merged.each((d, i, nodes) => this.renderBoxContent(nodes[i], d));
-      this.makeBoxesDraggable(merged);
+      // Bound per box AFTER its content exists, onto the outline only.
+      merged.each((d, i, nodes) => this.makeBoxDraggable(nodes[i], d));
     }
 
     /**
@@ -1984,25 +1988,28 @@
      * something else does not undo the arrangement, and links re-route live as
      * the box moves.
      */
-    makeBoxesDraggable(selection) {
+    makeBoxDraggable(groupNode, datum) {
       if (!d3.drag) {
         return;
       }
       const view = this;
-      selection.call(d3.drag()
-          // Clicks on the header controls and the member rows must still be
-          // clicks: a drag behaviour bound to the whole group swallows their
-          // mousedown, which made the fold control impossible to press a second
-          // time. Only empty space and the box outline start a drag.
-          .filter((event) => isDragHandle(event.target))
-          .on("start", function (event, d) {
-            view.dragOrigin = { x: event.x, y: event.y, offset: view.boxOffsets.get(d.classId) || { x: 0, y: 0 } };
+      // Bound to the outline rect, never the group: d3.drag calls
+      // stopImmediatePropagation on mousedown, so a group-level binding
+      // swallowed the clicks of every control inside the box — the fold control
+      // could set (…) but never clear it again.
+      d3.select(groupNode).selectAll("rect." + BOX_RECT_CLASS).call(d3.drag()
+          .on("start", (event) => {
+            view.dragOrigin = {
+              x: event.x,
+              y: event.y,
+              offset: view.boxOffsets.get(datum.classId) || { x: 0, y: 0 }
+            };
           })
-          .on("drag", function (event, d) {
+          .on("drag", (event) => {
             if (!view.dragOrigin) {
               return;
             }
-            view.boxOffsets.set(d.classId, {
+            view.boxOffsets.set(datum.classId, {
               x: view.dragOrigin.offset.x + (event.x - view.dragOrigin.x),
               y: view.dragOrigin.offset.y + (event.y - view.dragOrigin.y)
             });
@@ -2374,9 +2381,15 @@
 
     /** Every currently-drawn box rect other than the link's own endpoints, as routing obstacles. */
     obstaclesBetween(sourcePosition, targetPosition) {
+      // Compared by classId, not by rect identity. A collapsed box's endpoint
+      // carries a freshly built rect, so an identity check failed to recognise
+      // the link's own target and the router was made to route around the very
+      // box it was heading for — which is how lines ended up cutting through
+      // other boxes to get there.
+      const endpointClassIds = new Set([sourcePosition.classId, targetPosition.classId]);
       const obstacles = [];
       for (const [classId, position] of this.lastLayout ? this.lastLayout.boxPositions : []) {
-        if (position.rect !== sourcePosition.rect && position.rect !== targetPosition.rect) {
+        if (!endpointClassIds.has(classId)) {
           obstacles.push({ rect: position.rect });
         }
       }

@@ -80,6 +80,7 @@ function run() {
   testParallelLinksTakeDifferentTracks(internal);
   testEveryRouteIsStrictlyOrthogonal(internal);
   testRoutesAroundABoxDirectlyInTheWay(internal);
+  testAPathNeverSweepsThroughItsOwnEndpointBox(internal);
 
   console.log("corridor-routing.test.js: all assertions passed");
 }
@@ -173,6 +174,31 @@ function testRoutesAroundABoxDirectlyInTheWay(internal) {
   for (let i = 0; i + 1 < points.length; i++) {
     assert.ok(!crossesRect(points[i], points[i + 1], blocker.rect),
         "the route must go around a box sitting squarely between the two rows");
+  }
+}
+
+/**
+ * The endpoint boxes were modelled as walls with a slot at the attachment row,
+ * so a path could enter one side and leave the other — sweeping the whole box
+ * on the way. A link starts on the source's edge and ends on the target's, so
+ * it never needs to be inside either.
+ */
+function testAPathNeverSweepsThroughItsOwnEndpointBox(internal) {
+  // Target to the LEFT of the source: the case that produced the sweep.
+  const link = {
+    lane: 0, selfLink: false,
+    from: { rect: { x: 600, y: 40, width: 284, height: 98 }, rowY: 106 },
+    to: { rect: { x: 200, y: 300, width: 240, height: 80 }, rowY: 340 }
+  };
+
+  const points = internal.routeOrthogonalLink(link, [], new Set());
+
+  for (let i = 0; i + 1 < points.length; i++) {
+    for (const [name, rect] of [["source", link.from.rect], ["target", link.to.rect]]) {
+      assert.ok(!crossesRect(points[i], points[i + 1], rect),
+          `segment (${points[i].x},${points[i].y})-(${points[i + 1].x},${points[i + 1].y})`
+          + ` runs through its own ${name} box`);
+    }
   }
 }
 
