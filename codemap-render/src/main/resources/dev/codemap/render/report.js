@@ -742,6 +742,8 @@
   const TURN_PENALTY = 40;
   /** Cost of reusing a segment another link already claimed — steep, but not a ban. */
   const SHARED_SEGMENT_PENALTY = 4000;
+  /** Outward steps a self-link tries before accepting an occupied loop. */
+  const SELF_LINK_LOOP_ATTEMPTS = 12;
   /** Pitch at which routes are sampled when reserving and testing occupancy. */
   const RESERVATION_PITCH = LANE_SPACING;
   /** How far beyond a route's own extent a box still shapes its grid. */
@@ -793,7 +795,7 @@
    */
   function routeOrthogonalLink(link, obstacles, reserved) {
     if (link.selfLink) {
-      return routeSelfLink(link, obstacles);
+      return routeSelfLink(link, obstacles, reserved || new Set());
     }
     const searched = searchCorridorPath(link, obstacles, reserved || new Set());
     if (searched) {
@@ -1367,18 +1369,44 @@
    * otherwise reach into — a following column's box, most often — rather than
    * growing unbounded with the lane index (spec 007 §6.4.3).
    */
-  function routeSelfLink(link, obstacles) {
+  function routeSelfLink(link, obstacles, reserved) {
     const exitX = link.from.rect.x + link.from.rect.width;
     const sourceY = link.from.rowY;
     const targetY = link.to.rowY;
     const maxAllowedX = selfLinkCeilingX(exitX, sourceY, targetY, obstacles || []);
-    const loopX = selfLinkLoopX(exitX, link.lane, maxAllowedX);
+    const loopX = freeSelfLinkLoopX(exitX, link.lane, maxAllowedX, sourceY, targetY, reserved || new Set());
     return [
       { x: exitX, y: sourceY },
       { x: loopX, y: sourceY },
       { x: loopX, y: targetY },
       { x: exitX, y: targetY }
     ];
+  }
+
+  /**
+   * A loop x whose vertical run is not already occupied.
+   *
+   * <p>Lanes are allocated per corridor, so two self-links leaving the same box
+   * can share a lane index and draw their loops on top of one another. Self
+   * links were also routed without the reservation set at all, so nothing
+   * noticed. Steps outward until the run is clear, or gives up at the ceiling
+   * rather than crossing a box.
+   */
+  function freeSelfLinkLoopX(exitX, lane, maxAllowedX, sourceY, targetY, reserved) {
+    const from = { x: 0, y: Math.min(sourceY, targetY) };
+    const to = { x: 0, y: Math.max(sourceY, targetY) };
+    for (let step = 0; step < SELF_LINK_LOOP_ATTEMPTS; step++) {
+      const candidate = selfLinkLoopX(exitX, lane + step, maxAllowedX);
+      from.x = candidate;
+      to.x = candidate;
+      if (!overlapsReserved(from, to, reserved)) {
+        return candidate;
+      }
+      if (candidate >= maxAllowedX) {
+        break;
+      }
+    }
+    return selfLinkLoopX(exitX, lane, maxAllowedX);
   }
 
   /**
