@@ -141,7 +141,7 @@ public final class JavaSourceParser {
 
         for (BodyDeclaration<?> member : type.getMembers()) {
             if (member instanceof CallableDeclaration<?> callable) {
-                toMethod(callable, classId, file, sourceText, orphans).ifPresent(methods::add);
+                toMethod(callable, type, classId, file, sourceText, orphans).ifPresent(methods::add);
             } else if (member instanceof TypeDeclaration<?> nested) {
                 collectType(nested, packageName, nestedName + NAME_SEPARATOR + nested.getNameAsString(),
                         file, moduleId, sourceText, orphans, classes, methods);
@@ -197,7 +197,7 @@ public final class JavaSourceParser {
 
     /** Builds a method entry, including the source text the report will display. */
     private java.util.Optional<IndexedMethod> toMethod(
-            CallableDeclaration<?> callable, String classId, String file,
+            CallableDeclaration<?> callable, TypeDeclaration<?> declaringType, String classId, String file,
             SourceText sourceText, OrphanJavadocIndex orphans) {
 
         if (callable.getBegin().isEmpty() || callable.getEnd().isEmpty()) {
@@ -217,7 +217,9 @@ public final class JavaSourceParser {
                 lineEnd,
                 JavadocSummary.of(callable, orphans),
                 sourceText.slice(lineStart, lineEnd),
-                constructor));
+                constructor,
+                MethodVisibilities.of(callable, declaringType),
+                null));
     }
 
     private TypeKind kindOf(TypeDeclaration<?> type) {

@@ -58,13 +58,13 @@ html, body {
 
 #app {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 260px 1fr 380px;
   grid-template-rows: auto 1fr;
   height: 100vh;
 }
 
 header {
-  grid-column: 1 / span 2;
+  grid-column: 1 / span 3;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -110,6 +110,50 @@ header button {
 
 header button:hover,
 header button.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* Entry-point picker (spec 007 §4.1): a filterable list of pills a reader
+   clicks to draw the declaring class box — the diagram itself starts empty. */
+#entry-point-panel {
+  border-right: 1px solid var(--color-border);
+  background: var(--color-panel);
+  overflow-y: auto;
+  padding: 12px;
+}
+
+#entry-point-panel h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  margin: 0 0 8px 0;
+}
+
+#entry-point-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#entry-point-list li {
+  margin-bottom: 4px;
+}
+
+#entry-point-list button {
+  width: 100%;
+  text-align: left;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#entry-point-list button:hover {
   border-color: var(--color-accent);
   color: var(--color-accent);
 }
@@ -200,131 +244,162 @@ ul.nav-list a:hover {
   text-decoration: underline;
 }
 
-.node circle {
+/* UML class box (spec 007 §2.2): header (stereotype, name, expander) then
+   constructor / public / revealed-private compartments, separated by rules
+   (a dashed one above the private compartment). */
+.class-box .box-rect {
   fill: var(--color-panel);
   stroke: var(--color-border);
   stroke-width: 1.5px;
-  cursor: pointer;
 }
 
-/* Node status outlines (spec §5).
+.class-box .box-header {
+  fill: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
 
-   These must come *after* the plain `.node circle` rule above. Both selectors
-   have the same specificity, so source order alone decides the winner — with
-   the status rules first, the neutral grey stroke overrode every one of them
-   and the change overlay silently disappeared.
+.class-box .box-stereotype {
+  fill: var(--color-muted);
+  font-size: 10px;
+  font-style: italic;
+}
 
-   `added` and `changed` deliberately share one green outline: the spec treats
-   both as "this is new work", so there is no second selector for `added`. */
-.node-changed > circle {
+.class-box .compartment-rule {
+  stroke: var(--color-border);
+  stroke-width: 1px;
+}
+
+.class-box .compartment-rule-private {
+  stroke-dasharray: 3 2;
+}
+
+.class-box .member-row {
+  fill: var(--color-text);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.class-box .member-row-private {
+  fill: var(--color-muted);
+}
+
+/* The row a click (entry point, or a method-row expansion) points at is
+   underlined to mark it as the target (spec 007 §4.1, §4.3). */
+.class-box .member-row.underlined {
+  text-decoration: underline;
+}
+
+.class-box .expander {
+  fill: var(--color-accent);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Change-status outlines (spec 007 §3). Colour is never the only signal: the
+   border style differs too (dashed for AFFECTED) and a status glyph is drawn
+   in the header — see `.class-box .status-glyph`. */
+.class-box.status-added .box-rect {
   stroke: var(--color-added);
   stroke-width: 2.5px;
 }
 
-.node-removed > circle {
-  stroke: var(--color-removed);
-  stroke-width: 2.5px;
-  stroke-dasharray: 3 2;
+.class-box.status-added .box-header-fill {
+  fill: var(--color-added);
+  opacity: 0.15;
 }
 
-.node-affected > circle {
+.class-box.status-changed .box-rect {
+  stroke: var(--color-changed);
+  stroke-width: 2.5px;
+}
+
+.class-box.status-affected .box-rect {
   stroke: var(--color-affected);
   stroke-width: 2.5px;
+  stroke-dasharray: 6 3;
 }
 
-.node-removed text {
-  text-decoration: line-through;
+.class-box .member-row.status-added,
+.class-box .member-row.status-changed {
+  fill: var(--color-added);
 }
 
-/* The method a class card exists to draw attention to (spec §3.2.1 CLASS
-   nodes) — filled rather than merely outlined, so it reads as "this one" at
-   a glance among a class's other declared methods. Declared after the plain
-   `.node circle` rule for the same cascade-ordering reason as the status
-   rules above. */
-.node-focused > circle {
-  fill: var(--color-focused-fill);
+.class-box .member-row.status-affected {
+  fill: var(--color-affected);
+}
+
+.class-box .status-glyph {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.class-box .status-glyph-added,
+.class-box .status-glyph-changed {
+  fill: var(--color-added);
+}
+
+.class-box .status-glyph-affected {
+  fill: var(--color-affected);
+}
+
+/* Entry-point pill (spec 007 §2.1). */
+.entry-point-pill rect {
+  fill: var(--color-panel);
   stroke: var(--color-accent);
-  stroke-width: 2px;
+  stroke-width: 1.5px;
+  rx: 16px;
 }
 
-/* The label is the part of a node a reader actually aims at — a 6px circle is
-   a hard target, and a method label is often 200px wide. Both must respond, so
-   the label deliberately keeps pointer events rather than deferring to the
-   circle. */
-.node text {
+.entry-point-pill text {
   fill: var(--color-text);
   font-size: 12px;
   cursor: pointer;
   user-select: none;
 }
 
-.node.selected > circle {
-  stroke: var(--color-accent);
-  stroke-width: 3px;
-}
-
-/* A revisited node (spec §3.1) carries its "↗ already above" marker inside its
-   own label, so the whole node is dimmed rather than a separate badge element
-   being styled — clicking it jumps to the original occurrence. */
-.node-revisit > text {
-  fill: var(--color-muted);
-  font-style: italic;
-}
-
-.node-revisit > circle {
+/* Links (spec 007 §6.4): solid = public call, dashed = private call, and a
+   cross-module call keeps its own heavier, distinctly coloured stroke on top
+   of whichever style the call itself is (spec §7). */
+.class-link {
   fill: none;
-  stroke: var(--color-muted);
-  stroke-dasharray: 2 2;
+  stroke: var(--color-link-external);
+  stroke-width: 1.4px;
 }
 
-/* Edge kinds (spec §3.3) */
-.link {
-  fill: none;
-}
-
-/* The connector from a CLASS node to the one method shown beneath it
-   (entry point -> class -> handler, or a cross-class call -> class ->
-   callee) — not a call edge in its own right, so it stays visually quieter
-   than every real EdgeKind below. */
-.link-class-member {
-  stroke: var(--color-border);
-  stroke-width: 1px;
-}
-
-.link-call-internal {
+.class-link-dashed {
   stroke: var(--color-link-internal);
   stroke-dasharray: 4 3;
   stroke-width: 1.2px;
 }
 
-.link-call-external {
-  stroke: var(--color-link-external);
-  stroke-width: 1.4px;
-}
-
-.link-cross-module {
+.class-link-cross-module {
   stroke: var(--color-cross-module);
   stroke-width: 3px;
 }
 
-.link-uses-type {
-  stroke: var(--color-border);
-  stroke-width: 1px;
+.class-link.hovered,
+.class-link-endpoint.hovered {
+  stroke: var(--color-accent);
+  stroke-width: 3px;
 }
 
-.link-implements {
-  stroke: var(--color-border);
-  stroke-width: 1.2px;
-  stroke-dasharray: 1 3;
+/* Arrowhead marker, referenced by every link's `marker-end` — points at the callee (spec 007 §6.4.6). */
+#arrowhead path {
+  fill: var(--color-link-external);
 }
 
 .hidden {
   display: none !important;
 }
 
-/* Module overview (spec §3.2.2, §3.5): a small floating panel, hidden until
-   its header button is toggled, listing "which module depends on which"
-   from the real aggregated CROSS_MODULE edges. */
+/* Module overview (spec §7): a small floating panel, hidden until its header
+   button is toggled, listing "which module depends on which" from the real
+   aggregated CROSS_MODULE edges. */
 .module-overview-panel {
   display: none;
   position: absolute;

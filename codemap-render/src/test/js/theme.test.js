@@ -1,13 +1,9 @@
 "use strict";
 
 /**
- * Assertions on the light/dark theme toggle: default theme, `localStorage`
- * persistence, and `prefers-color-scheme` honoured only when nothing is
- * stored yet.
- *
- * The report is dark-only today (`report.css` hardcodes a dark palette in
- * `:root`); this covers the pure decision logic driving the toggle button,
- * not the CSS itself (guarded separately by stylesheet.test.js).
+ * Assertions on the light/dark theme toggle (spec §7, kept from feature/6):
+ * default theme, `localStorage` persistence, and `prefers-color-scheme`
+ * honoured only when nothing is stored yet.
  *
  * Run with: node src/test/js/theme.test.js
  */

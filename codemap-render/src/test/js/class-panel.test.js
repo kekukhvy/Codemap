@@ -1,14 +1,10 @@
 "use strict";
 
 /**
- * Assertions on the class side panel's data (clicking a CLASS node, spec
- * §3.2.1): it must show the class name, file, layer/module, and the list of
- * methods the class declares — but adds nothing to the canvas (covered by
- * click-behaviour.test.js). Full file source is deliberately NOT embedded a
- * second time here: `MethodView.source` already carries every method body,
- * and duplicating the surrounding file text would roughly double the
- * embedded source payload for no new information (measured: class-declared
- * line spans run ~1.7x method-declared spans in Kairos).
+ * Assertions on the class side panel's data (clicking a class name, spec 007
+ * §4.2): `calls:` / `called by:` are class-granular — deduplicated classes,
+ * not a flat method list — followed by the full verbatim class source
+ * (§5.2), and the method list for the box's own compartments.
  *
  * Run with: node src/test/js/class-panel.test.js
  */
@@ -18,8 +14,14 @@ const { loadReportScript } = require("./report-test-harness");
 
 const MODULE_ID = "kairos-api";
 const CLASS_ID = "com.example.TaskController";
+const REPOSITORY_CLASS = "com.example.TaskRepository";
+const VALIDATOR_CLASS = "com.example.TaskValidator";
 const METHOD_CREATE = "com.example.TaskController#create()";
 const METHOD_DELETE = "com.example.TaskController#delete()";
+const METHOD_SAVE = "com.example.TaskRepository#save()";
+const METHOD_FIND = "com.example.TaskRepository#find()";
+const METHOD_VALIDATE = "com.example.TaskValidator#validate()";
+const CLASS_SOURCE = "public class TaskController {\n  // real body\n}";
 
 function fixture() {
   return {
@@ -28,15 +30,36 @@ function fixture() {
     classes: [
       { id: CLASS_ID, moduleId: MODULE_ID, fqn: "com.example.TaskController", simpleName: "TaskController",
         packageName: "com.example", kind: "CLASS", layer: "ENTRY", file: "TaskController.java",
-        lineStart: 1, lineEnd: 40, javadoc: "Handles task requests.", status: null }
+        lineStart: 1, lineEnd: 40, javadoc: "Handles task requests.", status: null, source: CLASS_SOURCE },
+      { id: REPOSITORY_CLASS, moduleId: MODULE_ID, fqn: "com.example.TaskRepository", simpleName: "TaskRepository",
+        packageName: "com.example", kind: "CLASS", layer: "INFRASTRUCTURE", file: "TaskRepository.java",
+        lineStart: 1, lineEnd: 20, javadoc: null, status: null, source: "class TaskRepository { }" },
+      { id: VALIDATOR_CLASS, moduleId: MODULE_ID, fqn: "com.example.TaskValidator", simpleName: "TaskValidator",
+        packageName: "com.example", kind: "CLASS", layer: "APPLICATION", file: "TaskValidator.java",
+        lineStart: 1, lineEnd: 10, javadoc: null, status: null, source: "class TaskValidator { }" }
     ],
     methods: [
       { id: METHOD_CREATE, classId: CLASS_ID, name: "create", signature: "create()", file: "TaskController.java",
-        lineStart: 10, lineEnd: 13, javadoc: null, source: "void create() { }", constructor: false, status: null },
+        lineStart: 10, lineEnd: 13, javadoc: null, source: "void create() { save(); find(); }",
+        constructor: false, visibility: "PUBLIC", status: null },
       { id: METHOD_DELETE, classId: CLASS_ID, name: "delete", signature: "delete()", file: "TaskController.java",
-        lineStart: 15, lineEnd: 18, javadoc: null, source: "void delete() { }", constructor: false, status: null }
+        lineStart: 15, lineEnd: 18, javadoc: null, source: "void delete() { }",
+        constructor: false, visibility: "PUBLIC", status: null },
+      { id: METHOD_SAVE, classId: REPOSITORY_CLASS, name: "save", signature: "save()", file: "TaskRepository.java",
+        lineStart: 5, lineEnd: 7, javadoc: null, source: "void save() { }",
+        constructor: false, visibility: "PUBLIC", status: null },
+      { id: METHOD_FIND, classId: REPOSITORY_CLASS, name: "find", signature: "find()", file: "TaskRepository.java",
+        lineStart: 9, lineEnd: 11, javadoc: null, source: "void find() { }",
+        constructor: false, visibility: "PUBLIC", status: null },
+      { id: METHOD_VALIDATE, classId: VALIDATOR_CLASS, name: "validate", signature: "validate()", file: "TaskValidator.java",
+        lineStart: 3, lineEnd: 5, javadoc: null, source: "void validate() { create(); }",
+        constructor: false, visibility: "PUBLIC", status: null }
     ],
-    edges: [],
+    edges: [
+      { from: METHOD_CREATE, to: METHOD_SAVE, kind: "CALL_EXTERNAL", resolved: true, line: 11 },
+      { from: METHOD_CREATE, to: METHOD_FIND, kind: "CALL_EXTERNAL", resolved: true, line: 12 },
+      { from: METHOD_VALIDATE, to: METHOD_CREATE, kind: "CALL_EXTERNAL", resolved: true, line: 4 }
+    ],
     moduleDependencies: [],
     removedMethods: []
   };
@@ -54,12 +77,16 @@ function run() {
   assert.strictEqual(panelData.layer, "ENTRY");
   assert.strictEqual(panelData.moduleName, "kairos-api");
   assert.strictEqual(panelData.javadoc, "Handles task requests.");
+  assert.strictEqual(panelData.source, CLASS_SOURCE, "the full verbatim class source must be included (spec 007 §5.2)");
+
+  assert.strictEqual(panelData.callsClassIds.length, 1,
+      "two calls into TaskRepository must collapse into one class-granular entry");
+  assert.ok(panelData.callsClassIds.includes(REPOSITORY_CLASS));
+
+  assert.strictEqual(panelData.calledByClassIds.length, 1);
+  assert.ok(panelData.calledByClassIds.includes(VALIDATOR_CLASS));
+
   assert.strictEqual(panelData.methods.length, 2, "every method the class declares must be listed");
-  const methodIds = panelData.methods.map((m) => m.id);
-  assert.ok(methodIds.includes(METHOD_CREATE));
-  assert.ok(methodIds.includes(METHOD_DELETE));
-  assert.ok(!("source" in panelData) || panelData.source === undefined,
-      "the class panel must not embed a second copy of the file's full source");
 
   console.log("class-panel.test.js: all assertions passed");
 }

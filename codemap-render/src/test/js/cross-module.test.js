@@ -1,14 +1,10 @@
 "use strict";
 
 /**
- * Assertions that cross-module calls are collapsed by default and jump to
- * the target module rather than expanding in place (AC8, spec §3.2.2).
- *
- * Before this fix, `TreeBuilder.callChildren` treated CROSS_MODULE edges
- * identically to CALL_INTERNAL/CALL_EXTERNAL: the callee was expandable like
- * any other node, so a reader "expanding" the module boundary silently
- * inlined a foreign module's private call chain into this one's tree —
- * exactly what the module-root design (spec §3.2.1) exists to keep separate.
+ * Assertions that a cross-module call still draws a box and a link like any
+ * other public cross-class call (spec 007 §4.3), while keeping its own
+ * distinct connector style (spec §7, kept from feature/6) so a reader can
+ * still tell a module boundary was crossed.
  *
  * Run with: node src/test/js/cross-module.test.js
  */
@@ -35,16 +31,18 @@ function fixtureWithCrossModuleCall() {
     classes: [
       { id: classId, moduleId: apiModuleId, fqn: "com.example.TaskController", simpleName: "TaskController",
         packageName: "com.example", kind: "CLASS", layer: "ENTRY", file: "TaskController.java",
-        lineStart: 1, lineEnd: 20, javadoc: null, status: null },
+        lineStart: 1, lineEnd: 20, javadoc: null, status: null, source: "class TaskController { }" },
       { id: sharedClassId, moduleId: commonModuleId, fqn: "com.example.Shared", simpleName: "Shared",
         packageName: "com.example", kind: "CLASS", layer: "SUPPORT", file: "Shared.java",
-        lineStart: 1, lineEnd: 20, javadoc: null, status: null }
+        lineStart: 1, lineEnd: 20, javadoc: null, status: null, source: "class Shared { }" }
     ],
     methods: [
       { id: methodCreate, classId, name: "create", signature: "create()", file: "TaskController.java",
-        lineStart: 10, lineEnd: 13, javadoc: null, source: "void create() { validate(); }", constructor: false, status: null },
+        lineStart: 10, lineEnd: 13, javadoc: null, source: "void create() { validate(); }",
+        constructor: false, visibility: "PUBLIC", status: null },
       { id: methodValidate, classId: sharedClassId, name: "validate", signature: "validate()", file: "Shared.java",
-        lineStart: 3, lineEnd: 5, javadoc: null, source: "void validate() { }", constructor: false, status: null }
+        lineStart: 3, lineEnd: 5, javadoc: null, source: "void validate() { }",
+        constructor: false, visibility: "PUBLIC", status: null }
     ],
     edges: [
       { from: methodCreate, to: methodValidate, kind: "CROSS_MODULE", resolved: true, line: 11,
@@ -59,48 +57,22 @@ function run() {
   const data = fixtureWithCrossModuleCall();
   const internal = loadReportScript(data);
   const index = new internal.CodemapIndex(data);
-  const builder = new internal.TreeBuilder(index);
+  const controller = new internal.DiagramController(index);
 
-  const [moduleRoot] = builder.buildModuleRoots();
-  builder.expand(moduleRoot);
-  const [entryPointNode] = moduleRoot.children;
-  builder.expand(entryPointNode);
-  // entry point -> [class: TaskController] -> create()
-  const [controllerClassNode] = entryPointNode.children;
-  const [createNode] = controllerClassNode.children;
-  builder.expand(createNode);
+  controller.openEntryPoint("entry-1");
+  const result = controller.expandMethodRow(
+      "com.example.TaskController#create()", "com.example.TaskController", "entry-1");
 
-  testCrossModuleCalleeIsCollapsedByDefault(createNode);
-  testExpandingACollapsedCrossModuleNodeDoesNotMaterialiseChildren(builder, createNode);
-  testGraphViewJumpsToTheTargetModuleRoot(internal, index, builder, createNode);
+  assert.strictEqual(result.links.length, 1, "the cross-module call still draws exactly one link");
+  const [link] = result.links;
+  assert.strictEqual(link.targetClassId, "com.example.Shared", "the target class box is drawn, not collapsed");
+  assert.strictEqual(link.style, "solid", "a public cross-module call is a solid link, same rule as any public cross-class call");
+  assert.strictEqual(link.crossModule, true,
+      "the link must still carry the cross-module flag so the existing distinct connector style applies (spec §7)");
+
+  assert.ok(controller.diagram.boxFor("com.example.Shared"), "the target class box exists on the canvas");
 
   console.log("cross-module.test.js: all assertions passed");
-}
-
-function testCrossModuleCalleeIsCollapsedByDefault(createNode) {
-  assert.strictEqual(createNode.children.length, 1, "create() has exactly one outgoing call");
-  const [crossModuleNode] = createNode.children;
-  assert.strictEqual(crossModuleNode.collapsedCrossModule, true,
-      "a CROSS_MODULE callee must render collapsed by default (spec §3.2.2)");
-  assert.strictEqual(crossModuleNode.targetModuleId, "common",
-      "a collapsed cross-module node must remember which module it points into, to jump there");
-}
-
-function testExpandingACollapsedCrossModuleNodeDoesNotMaterialiseChildren(builder, createNode) {
-  const [crossModuleNode] = createNode.children;
-  builder.expand(crossModuleNode);
-  assert.strictEqual(crossModuleNode.children.length, 0,
-      "expanding a collapsed cross-module node must not inline the target module's call chain in place");
-}
-
-function testGraphViewJumpsToTheTargetModuleRoot(internal, index, builder, createNode) {
-  const view = new internal.GraphView(index, builder);
-  const [crossModuleNode] = createNode.children;
-
-  view.toggle(crossModuleNode);
-
-  assert.strictEqual(view.selectedMethodId, crossModuleNode.methodId,
-      "toggling a collapsed cross-module node must select/reveal its target method");
 }
 
 run();

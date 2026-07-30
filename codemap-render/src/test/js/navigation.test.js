@@ -1,16 +1,11 @@
 "use strict";
 
 /**
- * Assertions that "Called by" / "Calls" links in the side panel actually
- * navigate (AC6) — before this fix, `navSection` set
- * `link.dataset.methodId`, but nothing ever read it back on click, so the
- * lists rendered and looked navigable but did nothing.
- *
- * A chain must be walkable in both directions: "downward from an endpoint to
- * the database" even before every intermediate level has been manually
- * expanded, and "upward from a repository to the endpoints that reach it".
- * So navigating to a method that is not yet part of the materialised tree
- * must still open its side panel, not silently fail.
+ * Assertions that side-panel navigation actually opens the target (spec 007
+ * §4.2 links to classes/methods): selecting a class or method updates the
+ * view's selection state, whether or not that class is currently drawn on
+ * the canvas — a "calls"/"called by" link must always be able to open the
+ * side panel, even for a collaborator the reader has not expanded yet.
  *
  * Run with: node src/test/js/navigation.test.js
  */
@@ -33,16 +28,18 @@ function fixtureWithChain() {
     classes: [
       { id: classId, moduleId, fqn: "com.example.TaskController", simpleName: "TaskController",
         packageName: "com.example", kind: "CLASS", layer: "ENTRY", file: "TaskController.java",
-        lineStart: 1, lineEnd: 20, javadoc: null, status: null },
+        lineStart: 1, lineEnd: 20, javadoc: null, status: null, source: "class TaskController { }" },
       { id: repoClassId, moduleId, fqn: "com.example.TaskRepository", simpleName: "TaskRepository",
         packageName: "com.example", kind: "CLASS", layer: "INFRASTRUCTURE", file: "TaskRepository.java",
-        lineStart: 1, lineEnd: 20, javadoc: null, status: null }
+        lineStart: 1, lineEnd: 20, javadoc: null, status: null, source: "class TaskRepository { }" }
     ],
     methods: [
       { id: methodCreate, classId, name: "create", signature: "create()", file: "TaskController.java",
-        lineStart: 10, lineEnd: 13, javadoc: null, source: "void create() { save(); }", constructor: false, status: null },
+        lineStart: 10, lineEnd: 13, javadoc: null, source: "void create() { save(); }",
+        constructor: false, visibility: "PUBLIC", status: null },
       { id: methodSave, classId: repoClassId, name: "save", signature: "save()", file: "TaskRepository.java",
-        lineStart: 5, lineEnd: 7, javadoc: null, source: "void save() { }", constructor: false, status: null }
+        lineStart: 5, lineEnd: 7, javadoc: null, source: "void save() { }",
+        constructor: false, visibility: "PUBLIC", status: null }
     ],
     edges: [
       { from: methodCreate, to: methodSave, kind: "CALL_EXTERNAL", resolved: true, line: 11 }
@@ -56,50 +53,41 @@ function run() {
   const data = fixtureWithChain();
   const internal = loadReportScript(data);
   const index = new internal.CodemapIndex(data);
-  const treeBuilder = new internal.TreeBuilder(index);
-  const view = new internal.GraphView(index, treeBuilder);
+  const view = new internal.DiagramView(index);
 
-  testNavigatingToAnAlreadyMaterialisedNode(internal, index, view);
-  testNavigatingToANotYetMaterialisedNodeStillOpensThePanel(internal, index, view);
-  testNavSectionAnchorsCarryTheMethodIdForClickHandling(internal, index);
+  testNavigatingToAMethodNotYetDrawnStillSelectsIt(internal, view);
+  testNavigatingToAClassNotYetDrawnStillSelectsIt(internal, view);
+  testSelectingAMethodOpensItsPanelData(internal, index, view);
 
   console.log("navigation.test.js: all assertions passed");
 }
 
-function testNavigatingToAnAlreadyMaterialisedNode(internal, index, view) {
-  const [moduleRoot] = view.roots;
-  view.treeBuilder.expand(moduleRoot);
-  const [entryPointNode] = moduleRoot.children;
-  view.treeBuilder.expand(entryPointNode);
-  // The entry point reveals its owning class first, and the handler beneath it.
-  const [classNode] = entryPointNode.children;
-  const [createNode] = classNode.children;
-
-  view.navigateToMethod(createNode.methodId);
-
-  assert.strictEqual(view.selectedMethodId, createNode.methodId,
-      "navigating to a method already in the tree must select that exact node");
-}
-
-function testNavigatingToANotYetMaterialisedNodeStillOpensThePanel(internal, index, view) {
+function testNavigatingToAMethodNotYetDrawnStillSelectsIt(internal, view) {
   const saveMethodId = "com.example.TaskRepository#save()";
-  // Nothing has expanded far enough to materialise save() as a tree node yet.
-  const found = view.findNodeByMethodId(saveMethodId);
-  assert.strictEqual(found, null, "save() must not be materialised in the tree at this point (test setup check)");
 
   view.navigateToMethod(saveMethodId);
 
-  assert.strictEqual(view.selectedMethodId, saveMethodId,
-      "navigating to a method not yet expanded into the tree must still select it " +
-      "(a chain must be walkable downward to the database even before manual expansion)");
+  assert.strictEqual(view.selection.kind, "METHOD");
+  assert.strictEqual(view.selection.methodId, saveMethodId,
+      "navigating to a method not yet expanded into the diagram must still select it");
 }
 
-function testNavSectionAnchorsCarryTheMethodIdForClickHandling(internal, index) {
-  const method = index.method("com.example.TaskController#create()");
-  const incoming = index.incoming(method.id);
-  const outgoing = index.outgoing(method.id);
-  assert.ok(Array.isArray(incoming), "incoming lookup must return an array");
-  assert.ok(outgoing.length > 0, "fixture must have at least one outgoing edge to exercise a Calls link");
+function testNavigatingToAClassNotYetDrawnStillSelectsIt(internal, view) {
+  const repoClassId = "com.example.TaskRepository";
+
+  view.navigateToClass(repoClassId);
+
+  assert.strictEqual(view.selection.kind, "CLASS");
+  assert.strictEqual(view.selection.classId, repoClassId);
+}
+
+function testSelectingAMethodOpensItsPanelData(internal, index, view) {
+  const methodId = "com.example.TaskController#create()";
+
+  view.navigateToMethod(methodId);
+
+  const panelData = internal.buildMethodPanelData(index, view.selection.methodId);
+  assert.strictEqual(panelData.signature, "create()");
 }
 
 run();

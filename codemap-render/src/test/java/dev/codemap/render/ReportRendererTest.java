@@ -14,6 +14,7 @@ import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.model.Layer;
 import dev.codemap.core.model.SourceLocation;
 import dev.codemap.core.model.TypeKind;
+import dev.codemap.core.model.Visibility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -213,9 +214,9 @@ class ReportRendererTest {
                                 "com.example", TypeKind.CLASS, Layer.INFRASTRUCTURE, "TaskRepository.java", 1, 20, null)))
                 .methods(List.of(
                         new IndexedMethod(METHOD_ID, CLASS_ID, "create", "create()", "TaskController.java",
-                                10, 13, null, SOURCE_WITH_SCRIPT_TAG, false, ChangeStatus.CHANGED),
+                                10, 13, null, SOURCE_WITH_SCRIPT_TAG, false, Visibility.PUBLIC, ChangeStatus.CHANGED),
                         new IndexedMethod(OTHER_METHOD_ID, OTHER_CLASS_ID, "save", "save()", "TaskRepository.java",
-                                5, 7, null, "public void save() { }", false, ChangeStatus.UNCHANGED)))
+                                5, 7, null, "public void save() { }", false, Visibility.PUBLIC, ChangeStatus.UNCHANGED)))
                 .calls(List.of(
                         new CallEdge(METHOD_ID, OTHER_METHOD_ID, EdgeKind.CALL_EXTERNAL, true, 12, null, null),
                         new CallEdge(METHOD_ID, "com.example.Shared#validate()",

@@ -12,6 +12,7 @@ import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.model.Layer;
 import dev.codemap.core.model.RemovedMethod;
 import dev.codemap.core.model.TypeKind;
+import dev.codemap.core.model.Visibility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -155,6 +156,21 @@ class IndexStoreTest {
             Files.writeString(target, "{ this is not json");
 
             assertThat(store.read(target)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("defaults method visibility to PACKAGE when an older index.json omits the field")
+        void defaultsVisibilityWhenFieldAbsent() throws IOException {
+            Path target = workingDirectory.resolve("index.json");
+            store.write(sampleIndex(), target);
+            String withoutVisibility = Files.readString(target).replaceAll(",?\\s*\"visibility\"\\s*:\\s*\"\\w+\"", "");
+            Files.writeString(target, withoutVisibility);
+
+            CodeIndex restored = store.read(target).orElseThrow();
+
+            assertThat(restored.methods()).singleElement()
+                    .as("an unknown visibility must degrade to PACKAGE, never PUBLIC")
+                    .extracting(IndexedMethod::visibility).isEqualTo(Visibility.PACKAGE);
         }
 
         @Test

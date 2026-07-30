@@ -1,12 +1,8 @@
 "use strict";
 
 /**
- * Assertions that the module-level dependency overview (AC3, spec §3.2.2,
- * §3.5) is actually built from the real aggregated `moduleDependencies` — not
- * just embedded in the payload with nothing reading it.
- *
- * Before this fix, the string `moduleDependencies` appeared nowhere in
- * report.js: the data existed, but no code rendered it.
+ * Assertions that the module-level dependency overview (spec §7, kept from
+ * feature/6) is built from the real aggregated `moduleDependencies`.
  *
  * Run with: node src/test/js/module-overview.test.js
  */
@@ -40,8 +36,8 @@ function run() {
 
   const overview = internal.buildModuleOverview(index);
 
-  assertEveryDependencyIsRepresentedByName(overview, index);
-  assertModuleWithNoDependenciesStillListedAsAnIsolatedRoot(overview, index);
+  assertEveryDependencyIsRepresentedByName(overview);
+  assertModuleWithNoDependenciesStillListedAsAnIsolatedRoot(overview);
 
   console.log("module-overview.test.js: all assertions passed");
 }
@@ -53,9 +49,7 @@ function assertEveryDependencyIsRepresentedByName(overview) {
   assert.ok(rendered.includes("kairos-admin->common"), "kairos-admin depending on common must be visible by name, not id");
 }
 
-function assertModuleWithNoDependenciesStillListedAsAnIsolatedRoot(overview, index) {
-  // "common" has no outgoing dependency in the fixture (nothing it depends on)
-  // but must not cause the overview builder to fail or omit anything.
+function assertModuleWithNoDependenciesStillListedAsAnIsolatedRoot(overview) {
   const fromNames = overview.map((row) => row.fromName);
   assert.ok(!fromNames.includes("common"), "a module with no outgoing cross-module calls contributes no row of its own");
 }

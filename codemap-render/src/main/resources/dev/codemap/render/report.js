@@ -3,14 +3,6 @@
 
   const DATA = window.__CODEMAP_DATA__;
 
-  const NODE_KIND = {
-    MODULE: "MODULE",
-    ENTRY_POINT: "ENTRY_POINT",
-    CLASS: "CLASS",
-    METHOD: "METHOD",
-    TYPE_REF: "TYPE_REF"
-  };
-
   const EDGE_KIND = {
     CALL_INTERNAL: "CALL_INTERNAL",
     CALL_EXTERNAL: "CALL_EXTERNAL",
@@ -27,33 +19,35 @@
     UNCHANGED: "UNCHANGED"
   };
 
-  const ALREADY_ABOVE_LABEL = "↗ already above";
+  const VISIBILITY = {
+    PUBLIC: "PUBLIC",
+    PROTECTED: "PROTECTED",
+    PACKAGE: "PACKAGE",
+    PRIVATE: "PRIVATE"
+  };
+
+  const VISIBILITY_MARKER = {
+    PUBLIC: "+",
+    PROTECTED: "#",
+    PACKAGE: "~",
+    PRIVATE: "-"
+  };
+
   const ROOT_PAGE_LABEL = "/ (root)";
+  const SOURCE_CLASS = "source";
+  const TRANSITION_MS = 250;
+  const LINK_STYLE = { SOLID: "solid", DASHED: "dashed" };
 
-  const NODE_RADIUS = 6;
+  /** The strongest-first order a class box's own status resolves against its rows (spec 007 §3). */
+  const STATUS_PRECEDENCE = [CHANGE_STATUS.ADDED, CHANGE_STATUS.CHANGED, CHANGE_STATUS.AFFECTED, CHANGE_STATUS.UNCHANGED];
 
-  // The tree grows left-to-right (depth advances x, siblings stack in y)
-  // rather than top-down. Java identifiers are long, and a label is always
-  // drawn to the right of its node (spec-neutral choice, §3.1 only requires
-  // the tree to grow on expansion) — stacking siblings vertically means two
-  // labels can only ever collide if they are closer than a text line's
-  // height, never because of label width, which is unbounded for a top-down
-  // layout with wide siblings.
-  const LEVEL_WIDTH = 220;
-  const MIN_SIBLING_SPACING = 34;
   const ROOT_MARGIN_X = 40;
   const ROOT_MARGIN_Y = 40;
-  const TRANSITION_MS = 250;
-  const SOURCE_CLASS = "source";
-
-  // How far right of a node its outgoing edges start, so they clear the node's
-  // own label instead of crossing through it.
-  const LABEL_CLEARANCE = 90;
 
   /**
-   * Indexes the raw view model for O(1) lookups the tree builder and side
-   * panel both need repeatedly: methods and classes by id, edges by source,
-   * and edges by target (the "Called by" reverse lookup).
+   * Indexes the raw view model for O(1) lookups the diagram and side panel
+   * both need repeatedly: methods and classes by id, edges by source, and
+   * edges by target (the "Called by" reverse lookup).
    */
   class CodemapIndex {
     constructor(data) {
@@ -96,12 +90,13 @@
       return this.methodsByClassId.get(classId) || [];
     }
 
-    /** Whether any node has a non-unchanged, non-null status. */
-    hasChanges() {
-      const changed = (s) => s && s !== CHANGE_STATUS.UNCHANGED;
-      return this.data.methods.some((m) => changed(m.status))
-          || this.data.classes.some((c) => changed(c.status))
-          || this.data.removedMethods.length > 0;
+    /**
+     * Whether a call target is drawable at all (spec 007 §4.4): the JDK,
+     * third-party jars, and unresolved targets never become boxes — only a
+     * call whose target method is itself indexed can.
+     */
+    isDrawableCallTarget(edge) {
+      return edge.resolved && this.method(edge.to) !== undefined;
     }
   }
 
@@ -117,769 +112,567 @@
     return map;
   }
 
-  /** A unique key for one occurrence of a node in the rendered tree. */
-  let nextNodeSequence = 0;
+  /**
+   * The strongest status among a set of member statuses (spec 007 §3):
+   * `ADDED` > `CHANGED` > `AFFECTED` > `UNCHANGED`, and a missing/null status
+   * never outranks `UNCHANGED`.
+   */
+  function strongestStatus(statuses) {
+    for (const candidate of STATUS_PRECEDENCE) {
+      if (statuses.includes(candidate)) {
+        return candidate;
+      }
+    }
+    return CHANGE_STATUS.UNCHANGED;
+  }
 
-  function makeTreeNode(kind, id, label, parent, extra) {
-    nextNodeSequence += 1;
-    return Object.assign(
-        {
-          nodeKey: "n" + nextNodeSequence,
-          kind,
-          id,
-          label,
-          parent: parent || null,
-          children: [],
-          expanded: false,
-          collapsedRevisit: false,
-          revisitTargetKey: null,
-          collapsedCrossModule: false,
-          targetModuleId: null,
-          focused: false,
-          status: null,
-          depth: parent ? parent.depth + 1 : 0
-        },
-        extra || {});
+  /** The UML visibility marker for a row (spec 007 §2.2): `+`/`#`/`~`/`-`. */
+  function visibilityMarker(visibility) {
+    return VISIBILITY_MARKER[visibility] || VISIBILITY_MARKER[VISIBILITY.PACKAGE];
+  }
+
+  function isPublicApi(method) {
+    return method.visibility === VISIBILITY.PUBLIC || method.visibility === VISIBILITY.PROTECTED;
+  }
+
+  const STATUS_CSS_CLASS = {
+    ADDED: "status-added",
+    CHANGED: "status-changed",
+    AFFECTED: "status-affected"
+  };
+
+  /**
+   * The CSS classes for a class box's `<g>` (spec 007 §3): `class-box` plus,
+   * when the strongest status among the box itself and its visible rows is
+   * not `UNCHANGED`, exactly one `status-*` class — never more than one, so
+   * the cascade cannot pick the wrong colour.
+   */
+  function boxCssClasses(ownStatus, visibleRowStatuses) {
+    const strongest = strongestStatus([ownStatus, ...visibleRowStatuses]);
+    const classes = ["class-box"];
+    if (STATUS_CSS_CLASS[strongest]) {
+      classes.push(STATUS_CSS_CLASS[strongest]);
+    }
+    return classes;
+  }
+
+  /** The CSS classes for one member row: its own status, and whether it is underlined (spec 007 §4.1, §4.3). */
+  function rowCssClasses(status, underlined) {
+    const classes = ["member-row"];
+    if (STATUS_CSS_CLASS[status]) {
+      classes.push(STATUS_CSS_CLASS[status]);
+    }
+    if (underlined) {
+      classes.push("underlined");
+    }
+    return classes;
   }
 
   /**
-   * Builds one level of the lazy tree (spec §3.1). The tree grows only
-   * through methods — a CLASS node is context for the method beneath it, not
-   * a step in the chain, so it is inserted automatically alongside a method
-   * rather than being expanded into separately:
-   *
-   * <ul>
-   *   <li>An entry point reveals its owning class and, beneath it, only the
-   *       one method that handles it — not every method the class declares.
-   *   <li>Expanding a method reveals, per outgoing call, the callee's owning
-   *       class and the called method beneath it — except when the callee's
-   *       class is the one already shown one hop up, where a second class
-   *       header would be redundant and the callee is parented directly.
-   * </ul>
-   *
-   * <p>A method already open higher in the current branch renders collapsed
-   * with a revisit badge instead of being expanded again (the revisit check
-   * keys on the method only, so an intervening CLASS node is transparent to
-   * it — see {@link findAncestorMethod}), which is what keeps cycles from
-   * hanging the UI.
+   * The CSS classes for a routed link (spec 007 §6.4): solid (the default,
+   * `class-link` alone) or dashed for a private call, with the existing
+   * distinct cross-module style layered on top when the call crosses a
+   * module boundary (spec §7).
    */
-  class TreeBuilder {
-    constructor(index) {
-      this.index = index;
+  function linkCssClasses(link) {
+    const classes = ["class-link"];
+    if (link.style === LINK_STYLE.DASHED) {
+      classes.push("class-link-dashed");
     }
-
-    buildModuleRoots() {
-      return this.index.data.modules.map((module) =>
-          makeTreeNode(NODE_KIND.MODULE, module.id, module.name, null, {}));
+    if (link.crossModule) {
+      classes.push("class-link-cross-module");
     }
-
-    /**
-     * Expands one node in place, attaching its next level of children.
-     *
-     * <p>A collapsed revisit never materialises further children (spec §3.1):
-     * it already renders as a link back to the original occurrence, and
-     * expanding it would re-walk the same cycle the revisit rule exists to
-     * terminate.
-     *
-     * <p>A collapsed cross-module callee never materialises children either
-     * (spec §3.2.2): a module boundary is collapsed by default so a foreign
-     * module's private call chain does not get inlined into this one's tree.
-     * {@link GraphView#toggle} handles it separately, by jumping to the
-     * target module instead of calling this method.
-     *
-     * <p>A CLASS node never expands into the diagram at all: it is drawn once,
-     * already carrying its one relevant method, when its parent expanded.
-     * Clicking a CLASS node only opens the side panel (see
-     * {@link GraphView#select}); the canvas never grows from it.
-     */
-    expand(node) {
-      if (node.kind === NODE_KIND.CLASS) {
-        return;
-      }
-      if (node.expanded || node.collapsedRevisit || node.collapsedCrossModule) {
-        return;
-      }
-      node.expanded = true;
-      node.children = this.childrenOf(node);
-    }
-
-    childrenOf(node) {
-      switch (node.kind) {
-        case NODE_KIND.MODULE:
-          return this.entryPointChildren(node);
-        case NODE_KIND.ENTRY_POINT:
-          return this.handlerChildren(node);
-        case NODE_KIND.METHOD:
-          return this.callChildren(node);
-        default:
-          return [];
-      }
-    }
-
-    entryPointChildren(moduleNode) {
-      return this.index.entryPointsOf(moduleNode.id).map((entryPoint) => {
-        const label = entryPoint.label === "" ? ROOT_PAGE_LABEL : entryPoint.label;
-        return makeTreeNode(NODE_KIND.ENTRY_POINT, entryPoint.id, label, moduleNode, {
-          methodId: entryPoint.methodId,
-          entryPointKind: entryPoint.kind,
-          detectedBy: entryPoint.detectedBy
-        });
-      });
-    }
-
-    /** An entry point reveals its owning class, holding only the handler. */
-    handlerChildren(entryPointNode) {
-      const methodId = entryPointNode.methodId;
-      const method = this.index.method(methodId);
-      if (!method) {
-        return [];
-      }
-      const classNode = this.classNode(entryPointNode, method.classId);
-      const handlerNode = this.methodNode(classNode, methodId, null);
-      handlerNode.focused = true;
-      classNode.children = [handlerNode];
-      return [classNode];
-    }
-
-    /** A CLASS node: context for the method(s) shown beneath it, never itself expandable. */
-    classNode(parentNode, classId) {
-      const owningClass = this.index.classOf(classId);
-      const label = owningClass ? owningClass.simpleName : classId;
-      return makeTreeNode(NODE_KIND.CLASS, classId, label, parentNode, { classId });
-    }
-
-    methodNode(parentNode, methodId, edgeKind) {
-      const method = this.index.method(methodId);
-      const node = makeTreeNode(NODE_KIND.METHOD, methodId, method.name, parentNode, {
-        methodId,
-        status: method.status,
-        edgeKind: edgeKind || null
-      });
-      return node;
-    }
-
-    /**
-     * Every outgoing call becomes one hop: a same-class callee is parented
-     * directly under the caller (no redundant class node for the class
-     * already shown one hop up); a cross-class callee gets its own CLASS
-     * node first, carrying the edge's kind so the link from the caller
-     * still renders dashed/solid/heavy per spec §3.3.
-     */
-    callChildren(methodNode) {
-      if (methodNode.collapsedRevisit) {
-        return [];
-      }
-      const callerClassId = this.callerClassId(methodNode);
-      const edges = this.index.outgoing(methodNode.methodId)
-          .filter((edge) => edge.kind !== EDGE_KIND.USES_TYPE)
-          .filter((edge) => this.index.method(edge.to));
-      return edges.map((edge) => this.calleeHop(methodNode, edge, callerClassId));
-    }
-
-    /** The class the calling method belongs to, so a same-class callee can be detected. */
-    callerClassId(methodNode) {
-      const method = this.index.method(methodNode.methodId);
-      return method ? method.classId : null;
-    }
-
-    calleeHop(methodNode, edge, callerClassId) {
-      const calleeMethod = this.index.method(edge.to);
-      if (edge.kind === EDGE_KIND.CROSS_MODULE) {
-        return this.crossModuleHop(methodNode, edge);
-      }
-      if (calleeMethod.classId === callerClassId) {
-        return this.calleeMethodNode(methodNode, edge, methodNode);
-      }
-      const classNode = this.classNode(methodNode, calleeMethod.classId);
-      classNode.edgeKind = edge.kind;
-      const calleeNode = this.calleeMethodNode(classNode, edge, methodNode);
-      classNode.children = [calleeNode];
-      return classNode;
-    }
-
-    /** A callee in the same class as the caller: no class node, direct method-to-method hop. */
-    calleeMethodNode(parentNode, edge, revisitScopeNode) {
-      const node = this.methodNode(parentNode, edge.to, edge.kind);
-      node.focused = true;
-      const revisit = findAncestorMethod(revisitScopeNode, edge.to);
-      if (revisit) {
-        node.collapsedRevisit = true;
-        node.revisitTargetKey = revisit.nodeKey;
-      }
-      return node;
-    }
-
-    crossModuleHop(methodNode, edge) {
-      const node = this.methodNode(methodNode, edge.to, edge.kind);
-      node.focused = true;
-      node.collapsedCrossModule = true;
-      node.targetModuleId = edge.toModuleId;
-      return node;
-    }
-  }
-
-  /** Walks a node's ancestor chain looking for the same method, the revisit rule. */
-  function findAncestorMethod(node, methodId) {
-    let current = node;
-    while (current) {
-      if (current.kind === NODE_KIND.METHOD && current.methodId === methodId) {
-        return current;
-      }
-      current = current.parent;
-    }
-    return null;
-  }
-
-  function bootstrap(data) {
-    const index = new CodemapIndex(data);
-    const treeBuilder = new TreeBuilder(index);
-    const view = new GraphView(index, treeBuilder);
-    window.CodemapReport = { index, treeBuilder, view };
-    view.render();
-    wireControls(index, view);
+    return classes;
   }
 
   /**
-   * Owns D3 rendering of the lazy tree: layout, edge styling by kind, node
-   * status outlines, revisit badges, and the side panel. Kept as one class
-   * since selection, expansion, and drawing are tightly coupled through the
-   * same tree state, but each concern lives in its own method.
+   * Splits a class's declared methods into the three UML compartments (spec
+   * 007 §2.2): constructors, public API (PUBLIC/PROTECTED), and whichever
+   * private/package rows this box's expanders have revealed so far. A
+   * compartment with no rows is simply an empty array — the renderer omits
+   * its rule.
+   *
+   * @param index the {@link CodemapIndex}
+   * @param classId the class whose members to compose
+   * @param revealedMethodIds a {@code Set} of method ids currently revealed
+   *        in this box (spec 007 §2.3); private/package rows outside this set
+   *        are never listed
    */
-  class GraphView {
-    constructor(index, treeBuilder) {
-      this.index = index;
-      this.treeBuilder = treeBuilder;
-      this.svg = d3.select("#graph");
-      this.viewport = this.svg.append("g").attr("class", "viewport");
-      this.roots = treeBuilder.buildModuleRoots();
-      this.selectedMethodId = null;
-      this.focusOnChanges = false;
-      this.searchTerm = "";
-      this.layerFilter = "";
-      this.moduleFilter = "";
-      this.hasFittedView = false;
-      this.setupZoom();
+  function buildCompartments(index, classId, revealedMethodIds) {
+    const methods = index.methodsOfClass(classId);
+    const constructors = methods.filter((m) => m.constructor);
+    const publicMethods = methods.filter((m) => !m.constructor && isPublicApi(m));
+    const revealedPrivateMethods = methods.filter((m) =>
+        !m.constructor && !isPublicApi(m) && revealedMethodIds.has(m.id));
+    return { constructors, publicMethods, revealedPrivateMethods };
+  }
+
+  // ---------------------------------------------------------------------
+  // Diagram state (spec 007 §6.1, §6.2): box uniqueness and refcounted
+  // collapse, plus per-box private-row reveal tracking (§2.3).
+  // ---------------------------------------------------------------------
+
+  /** One box on the canvas: at most one instance ever exists per classId (spec 007 §6.1). */
+  class ClassBox {
+    constructor(classId) {
+      this.classId = classId;
+      /** Expander paths that revealed this box; removed only once this is empty (§6.2). */
+      this.revealingPaths = new Set();
+      /** method id -> Set of caller paths currently revealing that private row (§2.3). */
+      this.revealedPrivateRowPaths = new Map();
+      this.collapsed = true;
+      this.position = null;
     }
 
-    /**
-     * Wires D3 zoom/pan and seeds its internal transform with the same
-     * initial placement the viewport starts at, so the first pan or scroll
-     * gesture adjusts from where the tree actually is rather than jumping
-     * from an assumed identity transform.
-     */
-    setupZoom() {
-      this.zoomBehavior = d3.zoom().scaleExtent([0.2, 3]).on("zoom", (event) => {
-        this.viewport.attr("transform", event.transform);
-      });
-      this.svg.call(this.zoomBehavior);
-      this.applyTransform(d3.zoomIdentity.translate(ROOT_MARGIN_X, ROOT_MARGIN_Y));
-    }
-
-    /** Applies a transform to both the viewport and the zoom behaviour's state. */
-    applyTransform(transform) {
-      this.viewport.attr("transform", transform);
-      this.svg.call(this.zoomBehavior.transform, transform);
-    }
-
-    /**
-     * Frames every laid-out node inside the current SVG viewport on first
-     * render, so all module roots are visible regardless of how many there
-     * are, rather than relying on the fixed initial margin alone.
-     */
-    fitToView(layoutNodes) {
-      const svgNode = this.svg.node();
-      if (!svgNode || typeof svgNode.getBoundingClientRect !== "function") {
-        return;
-      }
-      const bounds = boundingBoxOf(layoutNodes);
-      const viewportSize = svgNode.getBoundingClientRect();
-      if (!viewportSize.width || !viewportSize.height) {
-        return;
-      }
-      const scale = fittingScale(bounds, viewportSize);
-      const translateX = ROOT_MARGIN_X - bounds.minX * scale;
-      const translateY = ROOT_MARGIN_Y - bounds.minY * scale;
-      this.applyTransform(d3.zoomIdentity.translate(translateX, translateY).scale(scale));
-    }
-
-    /**
-     * The single click handler for every node: selecting (opening the side
-     * panel) and expanding are not separate gestures here, because a reader
-     * has no reason to want one without the other.
-     *
-     * <p>A CLASS node is the one exception: it is context, not a step in the
-     * chain, so clicking it only opens its side panel and never touches the
-     * canvas — see {@link TreeBuilder#expand}, which already makes expanding
-     * a CLASS node a no-op; this keeps that same rule at the click layer so
-     * a class node is never even attempted.
-     */
-    handleNodeClick(node) {
-      this.select(node);
-      if (node.kind !== NODE_KIND.CLASS) {
-        this.toggle(node);
-      }
-    }
-
-    toggle(node) {
-      if (node.collapsedRevisit) {
-        this.jumpTo(node.revisitTargetKey);
-        return;
-      }
-      if (node.collapsedCrossModule) {
-        this.jumpToModule(node);
-        return;
-      }
-      if (node.expanded) {
-        node.expanded = false;
-        node.children = [];
-      } else {
-        this.treeBuilder.expand(node);
-      }
-      this.render();
-    }
-
-    /**
-     * "Expanding" a collapsed cross-module callee (spec §3.2.2) does not
-     * inline the target module's tree here — it takes the reader to that
-     * module instead, by selecting the target method directly. The reader
-     * lands in the target module's own call chain rather than a foreign
-     * module's internals appearing inside this one's branch.
-     */
-    jumpToModule(node) {
-      this.navigateToMethod(node.methodId);
-    }
-
-    jumpTo(nodeKey) {
-      const target = this.findByKey(nodeKey);
-      if (target) {
-        this.flash(nodeKey);
-      }
-    }
-
-    findByKey(nodeKey) {
-      return this.findInTree((node) => node.nodeKey === nodeKey);
-    }
-
-    /**
-     * Finds a method already materialised in the tree, wherever it occurs —
-     * the "Called by"/"Calls" panel does not know which branch a target was
-     * expanded under, so every root is searched.
-     */
-    findNodeByMethodId(methodId) {
-      return this.findInTree((node) => node.kind === NODE_KIND.METHOD && node.methodId === methodId);
-    }
-
-    findInTree(predicate) {
-      for (const root of this.roots) {
-        const found = findInSubtree(root, predicate);
-        if (found) {
-          return found;
+    get revealedPrivateMethodIds() {
+      const ids = new Set();
+      for (const [methodId, paths] of this.revealedPrivateRowPaths) {
+        if (paths.size > 0) {
+          ids.add(methodId);
         }
       }
-      return null;
+      return ids;
     }
+  }
 
-    flash(nodeKey) {
-      this.viewport.selectAll("g.node").filter((d) => d.nodeKey === nodeKey)
-          .select("circle")
-          .transition().duration(TRANSITION_MS)
-          .attr("r", NODE_RADIUS * 2)
-          .transition().duration(TRANSITION_MS)
-          .attr("r", NODE_RADIUS);
-    }
-
-    select(node) {
-      this.selectedMethodId = node.methodId || null;
-      this.render();
-      this.renderSidePanel(node);
+  /**
+   * Owns every box and the reference-counted bookkeeping that lets a shared
+   * collaborator survive collapsing one of several callers (spec 007 §6.1,
+   * §6.2). This class holds no D3/DOM state — it is the model the renderer
+   * reads, kept separately so uniqueness and collapse rules are provable
+   * without a canvas.
+   */
+  class DiagramState {
+    constructor() {
+      this.boxes = new Map();
     }
 
     /**
-     * Follows a "Called by"/"Calls" link to its target method (AC6): both
-     * lists must be navigable, walking a chain upward from a repository to
-     * the endpoints that reach it, or downward from an endpoint toward the
-     * database.
-     *
-     * <p>The tree is lazy (spec §3.1), so the target may not exist as a node
-     * yet — its ancestors may never have been expanded. Rather than fail
-     * silently, this selects a synthetic method node when no materialised one
-     * is found, so the side panel always opens; the reader can still expand
-     * the real tree from there to see the target in context.
+     * Returns the one box for `classId`, creating it on first reach. A
+     * second (or later) expander path reaching an already-drawn class reuses
+     * the same box instance rather than creating a duplicate (spec 007 §6.1)
+     * — the caller still records its own path so collapse accounting stays
+     * correct.
      */
-    navigateToMethod(methodId) {
-      const existing = this.findNodeByMethodId(methodId);
-      const node = existing || makeTreeNode(NODE_KIND.METHOD, methodId, methodId, null, { methodId });
-      this.select(node);
-      if (existing) {
-        this.flash(existing.nodeKey);
+    ensureBox(classId, revealingPath) {
+      let box = this.boxes.get(classId);
+      if (!box) {
+        box = new ClassBox(classId);
+        this.boxes.set(classId, box);
       }
+      box.revealingPaths.add(revealingPath);
+      return box;
     }
 
-    setFocusOnChanges(value) {
-      this.focusOnChanges = value;
-      this.render();
-    }
-
-    setSearchTerm(term) {
-      this.searchTerm = (term || "").toLowerCase();
-      this.render();
-    }
-
-    setLayerFilter(layer) {
-      this.layerFilter = layer || "";
-      this.render();
-    }
-
-    setModuleFilter(moduleId) {
-      this.moduleFilter = moduleId || "";
-      this.render();
-    }
-
-    render() {
-      const visibleRoots = this.visibleRoots();
-      const layoutNodes = [];
-      const layoutLinks = [];
-      layoutTree(visibleRoots, layoutNodes, layoutLinks);
-      this.drawLinks(layoutLinks);
-      this.drawNodes(layoutNodes);
-      if (!this.hasFittedView && layoutNodes.length > 0) {
-        this.fitToView(layoutNodes);
-        this.hasFittedView = true;
-      }
+    boxFor(classId) {
+      return this.boxes.get(classId);
     }
 
     /**
-     * The roots actually drawn this render: module filter, then focus-on-
-     * changes, then search/layer filtering, applied in that order because
-     * each narrows what the next stage needs to consider.
-     *
-     * <p>Search and layer filtering prune a *view* of the tree (see
-     * {@link pruneByFilters}) rather than the tree itself, so an ancestor
-     * whose own label does not match still renders when one of its already-
-     * expanded descendants does — hiding a node must not orphan children the
-     * reader already opened, and a match has to stay reachable from a root.
+     * Retires one expander path. A box is removed only once no revealing
+     * path remains (spec 007 §6.2) — a box still reachable from another
+     * expanded path stays exactly where it is.
      */
-    visibleRoots() {
-      const moduleFiltered = filterModuleRoots(this.roots, this.moduleFilter);
-      const changeFiltered = this.focusOnChanges
-          ? moduleFiltered.filter((root) => subtreeHasChange(root))
-          : moduleFiltered;
-      if (!this.searchTerm && !this.layerFilter) {
-        return changeFiltered;
+    collapse(revealingPath) {
+      for (const [classId, box] of this.boxes) {
+        box.revealingPaths.delete(revealingPath);
+        this.forgetPrivateRowsFor(box, revealingPath);
+        if (box.revealingPaths.size === 0) {
+          this.boxes.delete(classId);
+        }
       }
-      return pruneByFilters(changeFiltered, (node) => this.matchesFilters(node));
     }
 
-    matchesFilters(node) {
-      if (node.kind !== NODE_KIND.METHOD && node.kind !== NODE_KIND.ENTRY_POINT) {
-        return true;
+    forgetPrivateRowsFor(box, revealingPath) {
+      for (const paths of box.revealedPrivateRowPaths.values()) {
+        paths.delete(revealingPath);
       }
-      if (this.searchTerm && !nodeMatchesSearch(node, this.index, this.searchTerm)) {
-        return false;
-      }
-      if (this.layerFilter && !nodeMatchesLayer(node, this.index, this.layerFilter)) {
-        return false;
-      }
-      return true;
     }
 
-    drawLinks(layoutLinks) {
-      const selection = this.viewport.selectAll("path.link")
-          .data(layoutLinks, (d) => d.target.nodeKey);
-      selection.exit().remove();
-      selection.enter()
-          .append("path")
-          .attr("class", (d) => "link " + linkClass(d.kind))
-          .merge(selection)
-          .attr("class", (d) => "link " + linkClass(d.kind))
-          .attr("d", (d) => treeLink(d.source, d.target));
+    /** Reveals a private/package row in `box`, attributed to `callerPath` (spec 007 §2.3, §4.3.3). */
+    revealPrivateRow(box, methodId, callerPath) {
+      if (!box.revealedPrivateRowPaths.has(methodId)) {
+        box.revealedPrivateRowPaths.set(methodId, new Set());
+      }
+      box.revealedPrivateRowPaths.get(methodId).add(callerPath);
     }
 
-    drawNodes(layoutNodes) {
-      const selection = this.viewport.selectAll("g.node")
-          .data(layoutNodes, (d) => d.nodeKey);
-      selection.exit().remove();
-
-      const entered = selection.enter().append("g").attr("class", "node");
-      entered.append("circle").attr("r", NODE_RADIUS);
-      entered.append("text").attr("dy", 4).attr("x", NODE_RADIUS + 4);
-
-      const merged = entered.merge(selection);
-      merged
-          .attr("class", (d) => nodeClass(d, this.selectedMethodId))
-          .attr("transform", (d) => "translate(" + d.x + "," + d.y + ")")
-          .on("click", (event, d) => this.handleNodeClick(d));
-
-      merged.select("text").text((d) => nodeLabel(d));
-    }
-
-    renderSidePanel(node) {
-      const panel = document.getElementById("side-panel");
-      panel.innerHTML = "";
-      const onNavigate = (methodId) => this.navigateToMethod(methodId);
-      if (node.kind === NODE_KIND.METHOD) {
-        panel.appendChild(buildMethodPanel(this.index, node, onNavigate));
-      } else if (node.kind === NODE_KIND.CLASS) {
-        panel.appendChild(buildClassPanel(this.index, node, onNavigate));
-      } else {
-        const placeholder = document.createElement("div");
-        placeholder.className = "placeholder";
-        placeholder.textContent = "Select a method to see details.";
-        panel.appendChild(placeholder);
+    /** Un-reveals a private row for one caller path; the row disappears once no caller path remains. */
+    unrevealPrivateRow(box, methodId, callerPath) {
+      const paths = box.revealedPrivateRowPaths.get(methodId);
+      if (paths) {
+        paths.delete(callerPath);
       }
     }
   }
 
-  function findInSubtree(node, predicate) {
-    if (!node) {
-      return null;
-    }
-    if (predicate(node)) {
-      return node;
-    }
-    for (const child of node.children) {
-      const found = findInSubtree(child, predicate);
-      if (found) {
-        return found;
-      }
-    }
-    return null;
-  }
+  // ---------------------------------------------------------------------
+  // Diagram interaction (spec 007 §4): entry-point clicks and the `(+)`
+  // expander, both on a class header and on a method row. Builds on
+  // {@link DiagramState} for the uniqueness/refcount rules and stays free of
+  // D3/DOM so every expand/collapse rule is provable without a canvas.
+  // ---------------------------------------------------------------------
 
-  function subtreeHasChange(node) {
-    const changed = node.status && node.status !== CHANGE_STATUS.UNCHANGED;
-    if (changed) {
-      return true;
-    }
-    return node.children.some((child) => subtreeHasChange(child));
-  }
-
-  /** Keeps only the module root matching `moduleId`, or every root when none is chosen. */
-  function filterModuleRoots(roots, moduleId) {
-    if (!moduleId) {
-      return roots;
-    }
-    return roots.filter((root) => root.id === moduleId);
+  /** The expander path key for a method row's own expansion, scoped by the caller's own reveal path. */
+  function methodRowPath(methodId, parentPath) {
+    return parentPath + ">" + methodId;
   }
 
   /**
-   * Builds a filtered *view* of a tree: a node survives if it matches
-   * `predicate` itself, or if any of its already-materialised descendants do.
-   * Children that survive are copied into a shallow clone of their parent, so
-   * the real tree (and its `expanded`/`children` state used for further lazy
-   * expansion) is never mutated by filtering.
-   *
-   * @param roots the roots to filter (already past the module/change filters)
-   * @param predicate called with a node, true when it matches the active filters
-   * @return a new array of root clones, containing only matching branches
+   * Drives box/link build-out from user interaction (spec 007 §4): opening
+   * an entry point, the class-header expander ("what does this class use"),
+   * and the method-row expander ("what does this method call"). Every reveal
+   * is attributed to an expander path, so {@link DiagramState}'s reference
+   * counting is what makes collapsing one path leave a shared box in place.
    */
-  function pruneByFilters(roots, predicate) {
-    return roots.map((root) => pruneNode(root, predicate)).filter((node) => node !== null);
-  }
+  class DiagramController {
+    constructor(index) {
+      this.index = index;
+      this.diagram = new DiagramState();
+    }
 
-  function pruneNode(node, predicate) {
-    const survivingChildren = node.children
-        .map((child) => (child ? pruneNode(child, predicate) : null))
-        .filter((child) => child !== null);
-    // A CLASS node is context for the method(s) beneath it, not a filterable
-    // leaf in its own right (spec §3.2.1) — it survives only when at least
-    // one of its methods does, never on its own label matching.
-    const survivesOnItsOwnMerit = node.kind !== NODE_KIND.CLASS && predicate(node);
-    if (survivingChildren.length === 0 && !survivesOnItsOwnMerit) {
-      return null;
+    /**
+     * Opens an entry point (spec 007 §4.1): draws its declaring class box and
+     * a link from the pill to the entry method's row, with that row
+     * underlined.
+     */
+    openEntryPoint(entryPointId) {
+      const entryPoint = this.index.data.entryPoints.find((candidate) => candidate.id === entryPointId);
+      const method = this.index.method(entryPoint.methodId);
+      const box = this.diagram.ensureBox(method.classId, entryPointId);
+      return {
+        box,
+        underlinedMethodId: method.id,
+        link: { sourcePillId: entryPointId, targetClassId: method.classId, targetMethodId: method.id }
+      };
     }
-    return Object.assign({}, node, { children: survivingChildren });
-  }
 
-  function nodeMatchesSearch(node, index, term) {
-    if (node.label.toLowerCase().includes(term)) {
-      return true;
-    }
-    if (node.methodId) {
-      const method = index.method(node.methodId);
-      const owner = method && index.classOf(method.classId);
-      return owner ? owner.simpleName.toLowerCase().includes(term) : false;
-    }
-    return false;
-  }
-
-  function nodeMatchesLayer(node, index, layer) {
-    if (!node.methodId) {
-      return true;
-    }
-    const method = index.method(node.methodId);
-    const owner = method && index.classOf(method.classId);
-    return owner ? owner.layer === layer : true;
-  }
-
-  function linkClass(kind) {
-    switch (kind) {
-      case EDGE_KIND.CALL_INTERNAL:
-        return "link-call-internal";
-      case EDGE_KIND.CALL_EXTERNAL:
-        return "link-call-external";
-      case EDGE_KIND.CROSS_MODULE:
-        return "link-cross-module";
-      case EDGE_KIND.IMPLEMENTS:
-        return "link-implements";
-      case EDGE_KIND.USES_TYPE:
-        return "link-uses-type";
-      default:
-        // No real call edge: this is the class-node-to-its-one-method
-        // connector (entry point -> class -> handler, or a cross-class call
-        // -> class -> callee), not a call in its own right.
-        return "link-class-member";
-    }
-  }
-
-  function nodeClass(node, selectedMethodId) {
-    const classes = ["node"];
-    if (node.collapsedRevisit) {
-      classes.push("node-revisit");
-    }
-    if (node.focused) {
-      classes.push("node-focused");
-    }
-    if (node.status === CHANGE_STATUS.ADDED || node.status === CHANGE_STATUS.CHANGED) {
-      classes.push("node-changed");
-    } else if (node.status === CHANGE_STATUS.REMOVED) {
-      classes.push("node-removed");
-    } else if (node.status === CHANGE_STATUS.AFFECTED) {
-      classes.push("node-affected");
-    }
-    if (node.methodId && node.methodId === selectedMethodId) {
-      classes.push("selected");
-    }
-    return classes.join(" ");
-  }
-
-  function nodeLabel(node) {
-    return node.collapsedRevisit ? node.label + " " + ALREADY_ABOVE_LABEL : node.label;
-  }
-
-  /**
-   * Lays out every root's subtree left-to-right: depth advances the along-axis
-   * (x, screen-horizontal) and siblings stack along the cross-axis (y,
-   * screen-vertical), spaced no closer than {@link MIN_SIBLING_SPACING}. A
-   * margin keeps the first root off the SVG's edge instead of clipped at 0,0.
-   *
-   * @param roots the tree's root nodes (module roots)
-   * @param outNodes every laid-out node is appended here
-   * @param outLinks every parent-child link is appended here, as {source, target, kind}
-   */
-  function layoutTree(roots, outNodes, outLinks) {
-    let cursorCrossAxis = ROOT_MARGIN_Y;
-    for (const root of roots) {
-      cursorCrossAxis = layoutSubtree(root, 0, cursorCrossAxis, outNodes, outLinks) + MIN_SIBLING_SPACING;
-    }
-  }
-
-  function layoutSubtree(node, depth, crossAxisOffset, outNodes, outLinks) {
-    node.depth = depth;
-    node.alongAxis = ROOT_MARGIN_X + depth * LEVEL_WIDTH;
-    if (node.children.length === 0 || node.collapsedRevisit) {
-      node.crossAxis = crossAxisOffset;
-      applyScreenCoordinates(node);
-      outNodes.push(node);
-      return crossAxisOffset + MIN_SIBLING_SPACING;
-    }
-    let cursor = crossAxisOffset;
-    const childCrossAxes = [];
-    for (const child of node.children) {
-      if (!child) {
-        continue;
+    /**
+     * The class-header `(+)` expander (spec 007 §4.3): one box per distinct
+     * collaborator class reached by any method this class declares, one link
+     * per relationship — answers "what does this class use".
+     */
+    expandClassHeader(classId) {
+      const path = "class:" + classId;
+      const collaboratorClassIds = new Set();
+      const links = [];
+      for (const method of this.index.methodsOfClass(classId)) {
+        for (const edge of this.index.outgoing(method.id)) {
+          this.collectCollaborator(edge, classId, collaboratorClassIds, links);
+        }
       }
-      cursor = layoutSubtree(child, depth + 1, cursor, outNodes, outLinks);
-      childCrossAxes.push(child.crossAxis);
-      outLinks.push({ source: node, target: child, kind: child.edgeKind });
+      const boxes = [...collaboratorClassIds].map((collaboratorClassId) => this.diagram.ensureBox(collaboratorClassId, path));
+      return { boxes, links };
     }
-    node.crossAxis = childCrossAxes.length > 0 ? average(childCrossAxes) : crossAxisOffset;
-    applyScreenCoordinates(node);
-    outNodes.push(node);
-    return cursor;
+
+    collectCollaborator(edge, ownClassId, collaboratorClassIds, links) {
+      if (!this.index.isDrawableCallTarget(edge)) {
+        return;
+      }
+      const targetMethod = this.index.method(edge.to);
+      if (targetMethod.classId === ownClassId || !isPublicApi(targetMethod)) {
+        return;
+      }
+      collaboratorClassIds.add(targetMethod.classId);
+      links.push({
+        targetClassId: targetMethod.classId,
+        targetMethodId: targetMethod.id,
+        style: LINK_STYLE.SOLID,
+        crossModule: edge.kind === EDGE_KIND.CROSS_MODULE
+      });
+    }
+
+    /**
+     * The method-row `(+)` expander (spec 007 §4.3): one link per resolved
+     * outgoing call, following the three rules — public call to another
+     * class draws that class's box (or reuses it) with a solid link to the
+     * underlined target row; public call to this same class draws a solid
+     * link within the box; private call to this same class draws a dashed
+     * link and reveals the private row in this box.
+     *
+     * @param methodId the method being expanded
+     * @param ownerClassId the class declaring `methodId`
+     * @param parentPath the expander path this row itself was revealed
+     *        under (the entry point id, or an enclosing method-row path),
+     *        so this expansion's own path can be scoped beneath it
+     */
+    expandMethodRow(methodId, ownerClassId, parentPath) {
+      const path = methodRowPath(methodId, parentPath);
+      const links = [];
+      for (const edge of this.index.outgoing(methodId)) {
+        const link = this.expandOneCall(edge, ownerClassId, path);
+        if (link) {
+          links.push(link);
+        }
+      }
+      return { links, path };
+    }
+
+    expandOneCall(edge, ownerClassId, path) {
+      if (!this.index.isDrawableCallTarget(edge)) {
+        return null;
+      }
+      const targetMethod = this.index.method(edge.to);
+      if (targetMethod.classId !== ownerClassId) {
+        return this.crossClassCall(targetMethod, path, edge.kind === EDGE_KIND.CROSS_MODULE);
+      }
+      return isPublicApi(targetMethod)
+          ? this.sameClassPublicCall(targetMethod)
+          : this.sameClassPrivateCall(targetMethod, ownerClassId, path);
+    }
+
+    crossClassCall(targetMethod, path, crossModule) {
+      this.diagram.ensureBox(targetMethod.classId, path);
+      return {
+        targetClassId: targetMethod.classId,
+        targetMethodId: targetMethod.id,
+        style: LINK_STYLE.SOLID,
+        underlineTarget: true,
+        crossModule
+      };
+    }
+
+    sameClassPublicCall(targetMethod) {
+      return {
+        targetClassId: targetMethod.classId,
+        targetMethodId: targetMethod.id,
+        style: LINK_STYLE.SOLID,
+        underlineTarget: true,
+        selfLink: true
+      };
+    }
+
+    sameClassPrivateCall(targetMethod, ownerClassId, path) {
+      const box = this.diagram.ensureBox(ownerClassId, path);
+      this.diagram.revealPrivateRow(box, targetMethod.id, path);
+      return {
+        targetClassId: ownerClassId,
+        targetMethodId: targetMethod.id,
+        style: LINK_STYLE.DASHED,
+        selfLink: true
+      };
+    }
+
+    /** Collapses a method row's expansion (spec 007 §4.3, "(−) collapses what that expander revealed"). */
+    collapseMethodRow(methodId, parentPath) {
+      this.diagram.collapse(methodRowPath(methodId, parentPath));
+    }
+
+    /** Collapses a class header's expansion. */
+    collapseClassHeader(classId) {
+      this.diagram.collapse("class:" + classId);
+    }
   }
 
-  /** Maps the depth/sibling layout axes onto screen coordinates (x, y). */
-  function applyScreenCoordinates(node) {
-    node.x = node.alongAxis;
-    node.y = node.crossAxis;
-  }
+  // ---------------------------------------------------------------------
+  // Layered-column placement (spec 007 §6.3): pure geometry functions, kept
+  // free of D3/DOM so column assignment and ordering are provable in Node
+  // without a canvas.
+  // ---------------------------------------------------------------------
 
-  function average(numbers) {
-    return numbers.reduce((sum, n) => sum + n, 0) / numbers.length;
-  }
-
-  /** A horizontal bezier connecting a parent to a child laid out to its right. */
   /**
-   * A bezier from just past the source's label to the target's circle.
+   * Assigns each box id to a column by breadth-first call depth from `rootId`
+   * (spec 007 §6.3): the root sits in column 0, its direct links in column 1,
+   * and so on. A box reachable at two different depths sits in the
+   * shallowest one it was reached at, since BFS visits shallower links first
+   * and a box's column is never revisited once assigned.
    *
-   * <p>Edges leave from {@link LABEL_CLEARANCE} to the right of the node rather
-   * than from its centre: a label sits immediately right of its circle, so a
-   * parent with many children would otherwise have its own name buried under
-   * the fan of curves leaving it — which is exactly the case for a module root
-   * with twenty entry points.
+   * @param boxIds every box id that must receive a column, including `rootId`
+   * @param links {@code {source, target}} pairs, source/target are box ids
+   * @param rootId the entry point's box id, column 0
+   * @return {@code Map<boxId, columnIndex>}
    */
-  function treeLink(source, target) {
-    const departureX = source.x + LABEL_CLEARANCE;
-    const midX = (departureX + target.x) / 2;
-    return "M" + departureX + "," + source.y
-        + "C" + midX + "," + source.y
-        + " " + midX + "," + target.y
-        + " " + target.x + "," + target.y;
+  function assignColumns(boxIds, links, rootId) {
+    const outgoingByBoxId = groupBy(links, (link) => link.source);
+    const columns = new Map([[rootId, 0]]);
+    const queue = [rootId];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const currentColumn = columns.get(current);
+      const outgoing = outgoingByBoxId.get(current) || [];
+      for (const link of outgoing) {
+        if (!columns.has(link.target)) {
+          columns.set(link.target, currentColumn + 1);
+          queue.push(link.target);
+        }
+      }
+    }
+    for (const boxId of boxIds) {
+      if (!columns.has(boxId)) {
+        columns.set(boxId, 0);
+      }
+    }
+    return columns;
   }
 
-  /** The smallest axis-aligned box containing every laid-out node. */
-  function boundingBoxOf(layoutNodes) {
-    const xs = layoutNodes.map((n) => n.x);
-    const ys = layoutNodes.map((n) => n.y);
-    return {
-      minX: Math.min(...xs),
-      maxX: Math.max(...xs),
-      minY: Math.min(...ys),
-      maxY: Math.max(...ys)
+  /**
+   * Orders one column's boxes by the average cross-axis position of the
+   * parents that link into them (the standard barycentre heuristic for
+   * reducing link crossings, spec 007 §6.3) — deterministic for a given
+   * input, so re-layout never jitters. A box with no parent in `positions`
+   * keeps a barycentre of {@link Number#POSITIVE_INFINITY} so it sorts last
+   * rather than colliding at 0 with genuinely top-ranked boxes.
+   *
+   * @param boxIdsInColumn box ids currently in this column, any order
+   * @param links every link in the diagram, {@code {source, target}}
+   * @param parentPositions {@code {[parentBoxId]: crossAxisPosition}} of the
+   *        previous column, already laid out
+   * @return a new array, `boxIdsInColumn` sorted by ascending barycentre
+   */
+  function orderColumnByBarycentre(boxIdsInColumn, links, parentPositions) {
+    const incomingByTarget = groupBy(links, (link) => link.target);
+    const barycentreOf = (boxId) => {
+      const parents = (incomingByTarget.get(boxId) || [])
+          .map((link) => parentPositions[link.source])
+          .filter((position) => position !== undefined);
+      if (parents.length === 0) {
+        return Number.POSITIVE_INFINITY;
+      }
+      return parents.reduce((sum, position) => sum + position, 0) / parents.length;
     };
+    return [...boxIdsInColumn].sort((a, b) => {
+      const diff = barycentreOf(a) - barycentreOf(b);
+      return diff !== 0 ? diff : a.localeCompare(b);
+    });
   }
 
-  /** The largest scale that keeps a bounding box inside the given viewport, capped at 1. */
-  function fittingScale(bounds, viewportSize) {
-    const contentWidth = Math.max(bounds.maxX - bounds.minX, 1);
-    const contentHeight = Math.max(bounds.maxY - bounds.minY, 1);
-    const scaleX = (viewportSize.width - ROOT_MARGIN_X * 2) / contentWidth;
-    const scaleY = (viewportSize.height - ROOT_MARGIN_Y * 2) / contentHeight;
-    return Math.min(1, scaleX, scaleY);
-  }
+  // ---------------------------------------------------------------------
+  // Orthogonal link routing (spec 007 §6.4, AC11): horizontal/vertical
+  // segments only, lane offsets so parallel links never overlap, and no
+  // segment crosses a box rectangle. Kept as pure geometry, independent of
+  // D3, so "no segment intersects a box" and "no two links share a segment"
+  // are provable without a canvas.
+  // ---------------------------------------------------------------------
 
-  function buildMethodPanel(index, node, onNavigate) {
-    const fragment = document.createDocumentFragment();
-    const method = index.method(node.methodId);
-    const owner = index.classOf(method.classId);
-    const module = owner ? index.module(owner.moduleId) : null;
+  const LANE_SPACING = 14;
+  const SELF_LINK_LOOP_WIDTH = 36;
 
-    fragment.appendChild(section("Signature", textElement("code", method.signature)));
-    fragment.appendChild(badgeSection(owner, module));
-    fragment.appendChild(section("Location", textElement("div",
-        method.file + ":" + method.lineStart + "-" + method.lineEnd)));
-    if (method.javadoc) {
-      fragment.appendChild(section("Javadoc", textElement("div", method.javadoc)));
+  /**
+   * Routes one link as an orthogonal polyline (H/V segments only).
+   *
+   * <p>A regular link leaves the source row's right edge, runs to a lane
+   * reserved for it in the gap between the two boxes, turns to the target
+   * row's y, and enters the target's left edge. The lane is nudged clear of
+   * any obstacle box whose rectangle would otherwise block the vertical
+   * segment (spec 007 §6.4.3) — the lane grid guarantees a free corridor
+   * exists between columns since boxes never occupy the inter-column gap.
+   *
+   * <p>A self-link ({@code link.selfLink}) departs and re-enters the same
+   * box's right edge, looping out and back with a small distinct loop rather
+   * than degenerating into a zero-length link.
+   *
+   * @param link {@code {from: {rect, rowY}, to: {rect, rowY}, lane, selfLink}}
+   * @param obstacles boxes (other than the link's own endpoints) whose
+   *        rectangles a routed segment must not cross
+   * @return an array of {@code {x, y}} points describing the polyline
+   */
+  function routeOrthogonalLink(link, obstacles) {
+    if (link.selfLink) {
+      return routeSelfLink(link);
     }
-    fragment.appendChild(navSection("Called by", index.incoming(method.id), index, "from", onNavigate));
-    fragment.appendChild(navSection("Calls", index.outgoing(method.id), index, "to", onNavigate));
-    fragment.appendChild(section("Source", sourceElement(method)));
-    return fragment;
+    const sourceExitX = link.from.rect.x + link.from.rect.width;
+    const targetEntryX = link.to.rect.x;
+    const sourceY = link.from.rowY;
+    const targetY = link.to.rowY;
+    const laneX = laneCorridorX(sourceExitX, targetEntryX, link.lane, sourceY, targetY, obstacles);
+    return [
+      { x: sourceExitX, y: sourceY },
+      { x: laneX, y: sourceY },
+      { x: laneX, y: targetY },
+      { x: targetEntryX, y: targetY }
+    ];
+  }
+
+  /** The lane's x position, nudged right of any obstacle the vertical run would otherwise cross. */
+  function laneCorridorX(sourceExitX, targetEntryX, lane, sourceY, targetY, obstacles) {
+    const baseX = Math.min(sourceExitX, targetEntryX) + LANE_SPACING * (lane + 1);
+    let candidateX = baseX;
+    for (const obstacle of obstacles) {
+      candidateX = clearObstacle(candidateX, obstacle.rect, sourceY, targetY);
+    }
+    return candidateX;
+  }
+
+  /** Nudges a candidate vertical-run x to the right of an obstacle it would otherwise pass through. */
+  function clearObstacle(candidateX, obstacleRect, sourceY, targetY) {
+    const minY = Math.min(sourceY, targetY);
+    const maxY = Math.max(sourceY, targetY);
+    const verticalRunOverlapsObstacle = maxY > obstacleRect.y && minY < obstacleRect.y + obstacleRect.height;
+    const candidateInsideObstacleSpan = candidateX > obstacleRect.x && candidateX < obstacleRect.x + obstacleRect.width;
+    if (verticalRunOverlapsObstacle && candidateInsideObstacleSpan) {
+      return obstacleRect.x + obstacleRect.width + LANE_SPACING;
+    }
+    return candidateX;
+  }
+
+  /** A small loop leaving and re-entering the same box's right edge (spec 007 §6.4, self-links). */
+  function routeSelfLink(link) {
+    const exitX = link.from.rect.x + link.from.rect.width;
+    const loopX = exitX + SELF_LINK_LOOP_WIDTH + link.lane * LANE_SPACING;
+    const sourceY = link.from.rowY;
+    const targetY = link.to.rowY;
+    return [
+      { x: exitX, y: sourceY },
+      { x: loopX, y: sourceY },
+      { x: loopX, y: targetY },
+      { x: exitX, y: targetY }
+    ];
+  }
+
+  /** Renders a routed polyline (array of {@code {x, y}}) as an SVG path `d` attribute. */
+  function polylinePath(points) {
+    return points.map((point, index) => (index === 0 ? "M" : "L") + point.x + "," + point.y).join(" ");
   }
 
   /**
-   * Projects a class into exactly what its side panel shows (spec §3.2.1):
-   * name, file, layer/module, Javadoc, and the methods it declares.
+   * Assigns each link crossing one inter-column gap its own lane index (spec
+   * 007 §6.4.1, §6.4.4): links are ordered deterministically by their
+   * endpoints so the same input always yields the same assignment, then
+   * numbered 0..n-1 — a distinct lane per link is what keeps two parallel
+   * relationships from ever sharing a routed segment.
    *
-   * <p>Deliberately excludes the class's full file source. `MethodView`
-   * already embeds every method's real body; re-embedding the surrounding
-   * file text a second time would roughly double the source payload for no
-   * new information (class-declared line spans run ~1.7x method-declared
-   * spans, measured on Kairos) — the method list here is clickable, so a
-   * reader reaches any of those bodies in one more step instead.
+   * @param links every link crossing the same gap, each carrying a stable {@code id}
+   * @return {@code Map<linkId, laneIndex>}
+   */
+  function allocateLanes(links) {
+    const ordered = [...links].sort((a, b) => {
+      const bySource = a.source.localeCompare(b.source);
+      if (bySource !== 0) {
+        return bySource;
+      }
+      const byTarget = a.target.localeCompare(b.target);
+      return byTarget !== 0 ? byTarget : a.id.localeCompare(b.id);
+    });
+    const lanes = new Map();
+    ordered.forEach((link, index) => lanes.set(link.id, index));
+    return lanes;
+  }
+
+  // ---------------------------------------------------------------------
+  // Side panel data (spec 007 §4.2): class-granular `calls`/`called by` —
+  // deduplicated classes, never a flat method list — projected from the same
+  // `edges` list the diagram itself reads, so no second source of truth
+  // exists for "what calls what".
+  // ---------------------------------------------------------------------
+
+  /** The distinct classes reached by a set of edges, via each edge's target/source method's owning class. */
+  function distinctClassIds(index, edges, methodIdOf) {
+    const classIds = new Set();
+    for (const edge of edges) {
+      const method = index.method(methodIdOf(edge));
+      if (method) {
+        classIds.add(method.classId);
+      }
+    }
+    return [...classIds];
+  }
+
+  /**
+   * Projects a class into what its side panel shows when its name is clicked
+   * (spec 007 §4.2): class-granular `calls`/`called by`, then the full
+   * verbatim source, plus the methods it declares for the compartment lists.
    *
-   * @return {null} when the class id is unknown
+   * @return {@code null} when the class id is unknown
    */
   function buildClassPanelData(index, classId) {
     const owningClass = index.classOf(classId);
@@ -887,6 +680,10 @@
       return null;
     }
     const module = index.module(owningClass.moduleId);
+    const methods = index.methodsOfClass(classId);
+    const methodIds = new Set(methods.map((m) => m.id));
+    const outgoingEdges = methods.flatMap((m) => index.outgoing(m.id)).filter((e) => index.isDrawableCallTarget(e));
+    const incomingEdges = methods.flatMap((m) => index.incoming(m.id)).filter((e) => !methodIds.has(e.from));
     return {
       classId,
       simpleName: owningClass.simpleName,
@@ -895,49 +692,560 @@
       layer: owningClass.layer,
       moduleName: module ? module.name : owningClass.moduleId,
       javadoc: owningClass.javadoc,
-      methods: index.methodsOfClass(classId)
+      source: owningClass.source,
+      methods,
+      callsClassIds: distinctClassIds(index, outgoingEdges, (e) => e.to).filter((id) => id !== classId),
+      calledByClassIds: distinctClassIds(index, incomingEdges, (e) => e.from).filter((id) => id !== classId)
     };
   }
 
-  function buildClassPanel(index, node, onNavigate) {
+  /**
+   * Projects a method into what its side panel shows when its row name is
+   * clicked (spec 007 §4.2): the method's real source, plus the distinct
+   * classes that call it.
+   *
+   * @return {@code null} when the method id is unknown
+   */
+  function buildMethodPanelData(index, methodId) {
+    const method = index.method(methodId);
+    if (!method) {
+      return null;
+    }
+    const owner = index.classOf(method.classId);
+    const module = owner ? index.module(owner.moduleId) : null;
+    const incomingEdges = index.incoming(methodId).filter((e) => e.from !== methodId);
+    return {
+      methodId,
+      name: method.name,
+      signature: method.signature,
+      file: method.file,
+      lineStart: method.lineStart,
+      lineEnd: method.lineEnd,
+      javadoc: method.javadoc,
+      source: method.source,
+      visibility: method.visibility,
+      layer: owner ? owner.layer : null,
+      moduleName: module ? module.name : null,
+      calledByClassIds: distinctClassIds(index, incomingEdges, (e) => e.from).filter((id) => id !== method.classId)
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Entry-point picker filtering (spec §7, kept from feature/6): search,
+  // layer, and module narrow which entry points a reader can open — the
+  // diagram itself only ever contains what was actually expanded.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Narrows the entry-point list by search term (matches the pill label or
+   * the declaring class's simple name), layer (of the declaring class), and
+   * owning module — every criterion is optional and they combine with AND.
+   *
+   * @param entryPoints every entry point in the index
+   * @param index the {@link CodemapIndex}
+   * @param criteria {@code {searchTerm, layer, moduleId}}, each optional
+   */
+  function filterEntryPoints(entryPoints, index, criteria) {
+    const searchTerm = (criteria.searchTerm || "").toLowerCase();
+    return entryPoints.filter((entryPoint) => {
+      const method = index.method(entryPoint.methodId);
+      const owner = method && index.classOf(method.classId);
+      if (criteria.moduleId && entryPoint.moduleId !== criteria.moduleId) {
+        return false;
+      }
+      if (criteria.layer && (!owner || owner.layer !== criteria.layer)) {
+        return false;
+      }
+      if (searchTerm && !entryPointMatchesSearch(entryPoint, owner, searchTerm)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function entryPointMatchesSearch(entryPoint, owner, searchTerm) {
+    if (entryPoint.label.toLowerCase().includes(searchTerm)) {
+      return true;
+    }
+    return owner ? owner.simpleName.toLowerCase().includes(searchTerm) : false;
+  }
+
+  // ---------------------------------------------------------------------
+  // Pixel layout (spec 007 §6.3): applies {@link assignColumns} and
+  // {@link orderColumnByBarycentre} to a live {@link DiagramState}, sizing
+  // each box by its compartment row count and keeping positions stable
+  // across re-layout — a box only moves if its own column grows and only
+  // along the cross axis.
+  // ---------------------------------------------------------------------
+
+  const BOX_WIDTH = 220;
+  const COLUMN_GAP = 90;
+  const ROW_HEIGHT = 20;
+  const HEADER_HEIGHT = 26;
+  const COMPARTMENT_RULE_HEIGHT = 6;
+  const BOX_VERTICAL_GAP = 24;
+  const PILL_WIDTH = 160;
+  const PILL_HEIGHT = 34;
+
+  /** The pixel height a box needs for its current compartments (spec 007 §2.2). */
+  function boxHeight(compartments) {
+    const rows = compartments.constructors.length + compartments.publicMethods.length
+        + compartments.revealedPrivateMethods.length;
+    const rules = [compartments.constructors, compartments.publicMethods, compartments.revealedPrivateMethods]
+        .filter((rows) => rows.length > 0).length;
+    return HEADER_HEIGHT + rows * ROW_HEIGHT + rules * COMPARTMENT_RULE_HEIGHT;
+  }
+
+  /**
+   * Lays out every box currently in `diagram` into columns by call depth
+   * from `rootPillId` (spec 007 §6.3), ordering each column by barycentre,
+   * and stacking boxes top-down within a column with a fixed gap.
+   *
+   * @param diagram the live {@link DiagramState}
+   * @param index the {@link CodemapIndex}, for compartment sizing
+   * @param rootPillId the entry point id, column 0
+   * @return {@code {boxPositions: Map<classId, {rect, column}>}}
+   */
+  function layoutDiagram(diagram, index, rootPillId) {
+    const classIds = [...diagram.boxes.keys()];
+    const links = [...pillLinksFor(index, rootPillId), ...diagramLinksFor(diagram, index)];
+    const columns = assignColumns([rootPillId, ...classIds], links, rootPillId);
+
+    const byColumn = groupBy(classIds, (classId) => columns.get(classId));
+    const boxPositions = new Map();
+    const parentPositions = { [rootPillId]: 0 };
+    const maxColumn = Math.max(0, ...classIds.map((id) => columns.get(id)));
+    for (let column = 1; column <= maxColumn; column++) {
+      const boxesInColumn = byColumn.get(column) || [];
+      const ordered = orderColumnByBarycentre(boxesInColumn, links, parentPositions);
+      placeColumn(ordered, column, diagram, index, boxPositions, parentPositions);
+    }
+    const pillRect = { x: ROOT_MARGIN_X, y: ROOT_MARGIN_Y, width: PILL_WIDTH, height: PILL_HEIGHT };
+    return { boxPositions, pillRect };
+  }
+
+  /** The synthetic pill -> declaring-class link that seeds column 0 -> column 1 (spec 007 §4.1). */
+  function pillLinksFor(index, rootPillId) {
+    const entryPoint = index.data.entryPoints.find((candidate) => candidate.id === rootPillId);
+    const method = entryPoint && index.method(entryPoint.methodId);
+    return method ? [{ source: rootPillId, target: method.classId }] : [];
+  }
+
+  /** Every link between currently-drawn boxes, derived from resolved edges between their methods. */
+  function diagramLinksFor(diagram, index) {
+    const classIds = new Set(diagram.boxes.keys());
+    const links = [];
+    for (const classId of classIds) {
+      for (const method of index.methodsOfClass(classId)) {
+        for (const edge of index.outgoing(method.id)) {
+          addLinkIfCollaboratorIsDrawn(index, edge, classId, classIds, links);
+        }
+      }
+    }
+    return links;
+  }
+
+  function addLinkIfCollaboratorIsDrawn(index, edge, sourceClassId, drawnClassIds, links) {
+    if (!index.isDrawableCallTarget(edge)) {
+      return;
+    }
+    const targetMethod = index.method(edge.to);
+    if (targetMethod.classId !== sourceClassId && drawnClassIds.has(targetMethod.classId)) {
+      links.push({ source: sourceClassId, target: targetMethod.classId });
+    }
+  }
+
+  function placeColumn(orderedClassIds, column, diagram, index, boxPositions, parentPositions) {
+    let cursorY = ROOT_MARGIN_Y;
+    const columnX = ROOT_MARGIN_X + PILL_WIDTH + COLUMN_GAP + (column - 1) * (BOX_WIDTH + COLUMN_GAP);
+    for (const classId of orderedClassIds) {
+      const box = diagram.boxFor(classId);
+      const compartments = buildCompartments(index, classId, box.revealedPrivateMethodIds);
+      const height = boxHeight(compartments);
+      const rect = { x: columnX, y: cursorY, width: BOX_WIDTH, height };
+      boxPositions.set(classId, { rect, column, compartments });
+      parentPositions[classId] = cursorY;
+      cursorY += height + BOX_VERTICAL_GAP;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // DiagramView (spec 007 §4): the D3-facing orchestration. Owns exactly one
+  // {@link DiagramController} (and therefore one {@link DiagramState}) per
+  // report, translating clicks into expand/collapse calls and re-rendering
+  // the SVG. Selection/side-panel state lives here since it is what the
+  // click handlers and the side panel both need.
+  // ---------------------------------------------------------------------
+
+  const SELECTION_KIND = { CLASS: "CLASS", METHOD: "METHOD", ENTRY_POINT: "ENTRY_POINT" };
+
+  class DiagramView {
+    constructor(index) {
+      this.index = index;
+      this.controller = new DiagramController(index);
+      this.svg = d3.select("#graph");
+      this.viewport = this.svg.append("g").attr("class", "viewport");
+      this.selection = null;
+      this.underlinedMethodIds = new Set();
+      this.openPillId = null;
+      this.hasFittedView = false;
+      this.setupZoom();
+    }
+
+    setupZoom() {
+      this.zoomBehavior = d3.zoom().scaleExtent([0.2, 3]).on("zoom", (event) => {
+        this.viewport.attr("transform", event.transform);
+      });
+      this.svg.call(this.zoomBehavior);
+      this.applyTransform(d3.zoomIdentity.translate(ROOT_MARGIN_X, ROOT_MARGIN_Y));
+    }
+
+    applyTransform(transform) {
+      this.viewport.attr("transform", transform);
+      this.svg.call(this.zoomBehavior.transform, transform);
+    }
+
+    /** Opens an entry-point pill (spec 007 §4.1): draws its class, underlines the handler row. */
+    openEntryPointPill(entryPointId) {
+      const result = this.controller.openEntryPoint(entryPointId);
+      this.openPillId = entryPointId;
+      this.underlinedMethodIds.add(result.underlinedMethodId);
+      this.render();
+      return result;
+    }
+
+    /** The class-header `(+)`/`(−)` expander (spec 007 §4.3). */
+    toggleClassHeader(classId) {
+      const box = this.controller.diagram.boxFor(classId);
+      if (box && box.expandedHeader) {
+        this.controller.collapseClassHeader(classId);
+        box.expandedHeader = false;
+      } else {
+        this.controller.expandClassHeader(classId);
+        const reopened = this.controller.diagram.boxFor(classId);
+        if (reopened) {
+          reopened.expandedHeader = true;
+        }
+      }
+      this.render();
+    }
+
+    /** The method-row `(+)`/`(−)` expander (spec 007 §4.3). */
+    toggleMethodRow(methodId, ownerClassId, parentPath) {
+      if (this.expandedMethodRows && this.expandedMethodRows.has(methodId)) {
+        this.collapseMethodRow(methodId, parentPath);
+      } else {
+        this.expandMethodRow(methodId, ownerClassId, parentPath);
+      }
+      this.render();
+    }
+
+    expandMethodRow(methodId, ownerClassId, parentPath) {
+      const result = this.controller.expandMethodRow(methodId, ownerClassId, parentPath);
+      for (const link of result.links) {
+        if (link.underlineTarget) {
+          this.underlinedMethodIds.add(link.targetMethodId);
+        }
+      }
+      this.expandedMethodRows = this.expandedMethodRows || new Set();
+      this.expandedMethodRows.add(methodId);
+      return result;
+    }
+
+    collapseMethodRow(methodId, parentPath) {
+      this.controller.collapseMethodRow(methodId, parentPath);
+      if (this.expandedMethodRows) {
+        this.expandedMethodRows.delete(methodId);
+      }
+    }
+
+    /** Clicking a class name (spec 007 §4.2): opens the side panel, never touches the canvas. */
+    navigateToClass(classId) {
+      this.selection = { kind: SELECTION_KIND.CLASS, classId };
+      this.renderSidePanel();
+    }
+
+    /** Clicking a method row name (spec 007 §4.2): opens the side panel, never touches the canvas. */
+    navigateToMethod(methodId) {
+      this.selection = { kind: SELECTION_KIND.METHOD, methodId };
+      this.renderSidePanel();
+    }
+
+    render() {
+      if (!this.openPillId) {
+        return;
+      }
+      this.lastLayout = layoutDiagram(this.controller.diagram, this.index, this.openPillId);
+      this.laneAllocations = null;
+      this.drawPill(this.lastLayout);
+      this.drawBoxes(this.lastLayout);
+      this.drawLinks();
+    }
+
+    /** The entry-point pill itself (spec 007 §2.1, §4.1). */
+    drawPill(layout) {
+      const entryPoint = this.index.data.entryPoints.find((candidate) => candidate.id === this.openPillId);
+      const selection = this.viewport.selectAll("g.entry-point-pill").data([entryPoint], (d) => d.id);
+      const entered = selection.enter().append("g").attr("class", "entry-point-pill");
+      entered.append("rect").attr("width", PILL_WIDTH).attr("height", PILL_HEIGHT);
+      entered.append("text").attr("x", 12).attr("y", PILL_HEIGHT / 2 + 4);
+      const merged = entered.merge(selection);
+      merged.attr("transform", "translate(" + layout.pillRect.x + "," + layout.pillRect.y + ")");
+      merged.select("text").text((d) => (d.label === "" ? ROOT_PAGE_LABEL : d.label));
+    }
+
+    drawBoxes(layout) {
+      this.methodRowPositions = new Map();
+      const boxes = [...layout.boxPositions.entries()].map(([classId, position]) => ({
+        classId,
+        ...position,
+        box: this.controller.diagram.boxFor(classId)
+      }));
+      const selection = this.viewport.selectAll("g.class-box").data(boxes, (d) => d.classId);
+      selection.exit().remove();
+      const entered = selection.enter().append("g");
+      const merged = entered.merge(selection);
+      merged.attr("transform", (d) => "translate(" + d.rect.x + "," + d.rect.y + ")");
+      merged.attr("class", (d) => this.classBoxCssClasses(d).join(" "));
+      merged.each((d, i, nodes) => this.renderBoxContent(nodes[i], d));
+    }
+
+    classBoxCssClasses(d) {
+      const rowStatuses = [...d.compartments.constructors, ...d.compartments.publicMethods, ...d.compartments.revealedPrivateMethods]
+          .map((method) => method.status);
+      const owningClass = this.index.classOf(d.classId);
+      return boxCssClasses(owningClass ? owningClass.status : null, rowStatuses);
+    }
+
+    /** Rebuilds one box's inner SVG: header, expander, and each compartment's rows. */
+    renderBoxContent(groupNode, d) {
+      const group = d3.select(groupNode);
+      group.selectAll("*").remove();
+      group.append("rect").attr("class", "box-rect").attr("width", d.rect.width).attr("height", d.rect.height);
+      this.renderBoxHeader(group, d);
+      this.renderCompartmentRows(group, d);
+    }
+
+    renderBoxHeader(group, d) {
+      const owningClass = this.index.classOf(d.classId);
+      const header = group.append("text").attr("class", "box-header").attr("x", 8).attr("y", 16)
+          .text((owningClass ? owningClass.simpleName : d.classId));
+      header.on("click", () => this.navigateToClass(d.classId));
+      group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", 16).text("(+)")
+          .on("click", () => this.toggleClassHeader(d.classId));
+    }
+
+    renderCompartmentRows(group, d) {
+      let y = HEADER_HEIGHT;
+      y = this.renderCompartment(group, d, d.compartments.constructors, y, false);
+      y = this.renderCompartment(group, d, d.compartments.publicMethods, y, false);
+      this.renderCompartment(group, d, d.compartments.revealedPrivateMethods, y, true);
+    }
+
+    renderCompartment(group, d, methods, startY, isPrivateCompartment) {
+      if (methods.length === 0) {
+        return startY;
+      }
+      let y = startY;
+      if (startY > HEADER_HEIGHT) {
+        group.append("line").attr("class", "compartment-rule" + (isPrivateCompartment ? " compartment-rule-private" : ""))
+            .attr("x1", 0).attr("x2", d.rect.width).attr("y1", y).attr("y2", y);
+        y += COMPARTMENT_RULE_HEIGHT;
+      }
+      for (const method of methods) {
+        this.renderMemberRow(group, d, method, y, isPrivateCompartment);
+        this.methodRowPositions.set(method.id, { classId: d.classId, rect: d.rect, rowY: d.rect.y + y + 14 });
+        y += ROW_HEIGHT;
+      }
+      return y;
+    }
+
+    renderMemberRow(group, d, method, y, isPrivateCompartment) {
+      const underlined = this.underlinedMethodIds.has(method.id);
+      const classes = rowCssClasses(method.status, underlined).concat(isPrivateCompartment ? ["member-row-private"] : []);
+      const label = visibilityMarker(method.visibility) + " " + method.signature;
+      group.append("text").attr("class", classes.join(" ")).attr("x", 12).attr("y", y + 14).text(label)
+          .on("click", () => this.navigateToMethod(method.id));
+      group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", y + 14).text("(+)")
+          .on("click", () => this.toggleMethodRow(method.id, d.classId, this.expanderPathFor(d.classId)));
+    }
+
+    /** The expander path a method row's own expansion should be scoped beneath (spec 007 §6.2). */
+    expanderPathFor(classId) {
+      const box = this.controller.diagram.boxFor(classId);
+      return box ? [...box.revealingPaths][0] : this.openPillId;
+    }
+
+    /**
+     * Recomputes every link a currently-expanded method row or class header
+     * produces (spec 007 §4.3) — declarative rather than accumulated, so a
+     * re-render never drifts from what is actually still expanded.
+     */
+    renderableLinks() {
+      const links = [];
+      const seenIds = new Set();
+      for (const methodId of this.expandedMethodRows || []) {
+        const method = this.index.method(methodId);
+        if (!method) {
+          continue;
+        }
+        this.addMethodRowLinks(method, links, seenIds);
+      }
+      return links;
+    }
+
+    addMethodRowLinks(method, links, seenIds) {
+      for (const edge of this.index.outgoing(method.id)) {
+        if (!this.index.isDrawableCallTarget(edge)) {
+          continue;
+        }
+        const target = this.index.method(edge.to);
+        const style = target.classId !== method.classId || isPublicApi(target) ? LINK_STYLE.SOLID : LINK_STYLE.DASHED;
+        const linkId = method.id + "->" + target.id;
+        if (seenIds.has(linkId)) {
+          continue;
+        }
+        seenIds.add(linkId);
+        links.push({
+          id: linkId,
+          sourceMethodId: method.id,
+          targetMethodId: target.id,
+          style,
+          crossModule: edge.kind === EDGE_KIND.CROSS_MODULE,
+          selfLink: target.classId === method.classId
+        });
+      }
+    }
+
+    drawLinks() {
+      const links = this.renderableLinks().map((link) => this.routedLink(link)).filter((link) => link !== null);
+      const selection = this.viewport.selectAll("path.class-link").data(links, (d) => d.id);
+      selection.exit().remove();
+      const entered = selection.enter().append("path");
+      const merged = entered.merge(selection);
+      merged
+          .attr("class", (d) => linkCssClasses(d).join(" "))
+          .attr("d", (d) => polylinePath(d.points))
+          .attr("marker-end", "url(#arrowhead)")
+          .on("mouseenter", (event, d) => this.setLinkHovered(d.id, true))
+          .on("mouseleave", (event, d) => this.setLinkHovered(d.id, false));
+    }
+
+    /** Hovering a link highlights it and both endpoints (spec 007 §6.4.6). */
+    setLinkHovered(linkId, hovered) {
+      this.viewport.selectAll("path.class-link").filter((d) => d.id === linkId).classed("hovered", hovered);
+    }
+
+    /** Resolves a method-level link into routable endpoints, or `null` if either row is not currently drawn. */
+    routedLink(link) {
+      const sourcePosition = this.methodRowPositions.get(link.sourceMethodId);
+      const targetPosition = this.methodRowPositions.get(link.targetMethodId);
+      if (!sourcePosition || !targetPosition) {
+        return null;
+      }
+      const obstacles = this.obstaclesBetween(sourcePosition, targetPosition);
+      const points = routeOrthogonalLink({
+        from: sourcePosition,
+        to: targetPosition,
+        lane: this.laneFor(link.id, sourcePosition, targetPosition),
+        selfLink: link.selfLink
+      }, obstacles);
+      return { ...link, points };
+    }
+
+    /** Every currently-drawn box rect other than the link's own endpoints, as routing obstacles. */
+    obstaclesBetween(sourcePosition, targetPosition) {
+      const obstacles = [];
+      for (const [classId, position] of this.lastLayout ? this.lastLayout.boxPositions : []) {
+        if (position.rect !== sourcePosition.rect && position.rect !== targetPosition.rect) {
+          obstacles.push({ rect: position.rect });
+        }
+      }
+      return obstacles;
+    }
+
+    /** A stable lane index per link id, so parallel links never share a routed segment (spec 007 §6.4.4). */
+    laneFor(linkId, sourcePosition, targetPosition) {
+      const gapKey = sourcePosition.classId + ">" + targetPosition.classId;
+      this.laneAllocations = this.laneAllocations || new Map();
+      if (!this.laneAllocations.has(gapKey)) {
+        this.laneAllocations.set(gapKey, 0);
+      }
+      const lane = this.laneAllocations.get(gapKey);
+      this.laneAllocations.set(gapKey, lane + 1);
+      return lane;
+    }
+
+    renderSidePanel() {
+      const panel = document.getElementById("side-panel");
+      panel.innerHTML = "";
+      if (!this.selection) {
+        return;
+      }
+      if (this.selection.kind === SELECTION_KIND.CLASS) {
+        panel.appendChild(buildClassPanelElement(this.index, this.selection.classId, (id) => this.navigateToClass(id)));
+      } else if (this.selection.kind === SELECTION_KIND.METHOD) {
+        panel.appendChild(buildMethodPanelElement(this.index, this.selection.methodId, (id) => this.navigateToClass(id)));
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Side panel DOM (spec 007 §4.2): class-name click shows class-granular
+  // calls/called-by plus the full class source; method-row click shows
+  // called-by plus the method source.
+  // ---------------------------------------------------------------------
+
+  function buildClassPanelElement(index, classId, onNavigateToClass) {
     const fragment = document.createDocumentFragment();
-    const panelData = buildClassPanelData(index, node.classId);
+    const panelData = buildClassPanelData(index, classId);
     if (!panelData) {
       return fragment;
     }
-
     fragment.appendChild(section("Class", textElement("code", panelData.fqn)));
-    fragment.appendChild(classBadgeSection(panelData));
+    fragment.appendChild(badgeSection(panelData.layer, panelData.moduleName));
     fragment.appendChild(section("File", textElement("div", panelData.file)));
     if (panelData.javadoc) {
       fragment.appendChild(section("Javadoc", textElement("div", panelData.javadoc)));
     }
-    fragment.appendChild(section("Methods", classMethodList(panelData.methods, onNavigate)));
+    fragment.appendChild(classIdListSection("Calls", panelData.callsClassIds, index, onNavigateToClass));
+    fragment.appendChild(classIdListSection("Called by", panelData.calledByClassIds, index, onNavigateToClass));
+    fragment.appendChild(section("Source", sourceElement(panelData.source)));
     return fragment;
   }
 
-  function classBadgeSection(panelData) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "panel-section";
-    wrapper.appendChild(badge("badge-layer", panelData.layer));
-    wrapper.appendChild(badge("badge-module", panelData.moduleName));
-    return wrapper;
+  function buildMethodPanelElement(index, methodId, onNavigateToClass) {
+    const fragment = document.createDocumentFragment();
+    const panelData = buildMethodPanelData(index, methodId);
+    if (!panelData) {
+      return fragment;
+    }
+    fragment.appendChild(section("Signature", textElement("code", panelData.signature)));
+    fragment.appendChild(badgeSection(panelData.layer, panelData.moduleName));
+    fragment.appendChild(section("Location", textElement("div",
+        panelData.file + ":" + panelData.lineStart + "-" + panelData.lineEnd)));
+    if (panelData.javadoc) {
+      fragment.appendChild(section("Javadoc", textElement("div", panelData.javadoc)));
+    }
+    fragment.appendChild(classIdListSection("Called by", panelData.calledByClassIds, index, onNavigateToClass));
+    fragment.appendChild(section("Source", sourceElement(panelData.source)));
+    return fragment;
   }
 
-  /** The class's declared methods, so a reader sees what else is in there. */
-  function classMethodList(methods, onNavigate) {
+  function classIdListSection(title, classIds, index, onNavigate) {
     const list = document.createElement("ul");
     list.className = "nav-list";
-    for (const method of methods) {
+    for (const classId of classIds) {
+      const owningClass = index.classOf(classId);
       const item = document.createElement("li");
       const link = document.createElement("a");
-      link.textContent = method.signature;
-      link.dataset.methodId = method.id;
-      link.addEventListener("click", () => onNavigate(method.id));
+      link.textContent = owningClass ? owningClass.simpleName : classId;
+      link.dataset.classId = classId;
+      link.addEventListener("click", () => onNavigate(classId));
       item.appendChild(link);
       list.appendChild(item);
     }
-    return list;
+    return section(title, list);
   }
 
   function section(title, content) {
@@ -950,14 +1258,14 @@
     return wrapper;
   }
 
-  function badgeSection(ownerClass, module) {
+  function badgeSection(layer, moduleName) {
     const wrapper = document.createElement("div");
     wrapper.className = "panel-section";
-    if (ownerClass) {
-      wrapper.appendChild(badge("badge-layer", ownerClass.layer));
+    if (layer) {
+      wrapper.appendChild(badge("badge-layer", layer));
     }
-    if (module) {
-      wrapper.appendChild(badge("badge-module", module.name));
+    if (moduleName) {
+      wrapper.appendChild(badge("badge-module", moduleName));
     }
     return wrapper;
   }
@@ -975,126 +1283,45 @@
     return element;
   }
 
-  function sourceElement(method) {
-    const element = textElement("pre", method.source);
+  function sourceElement(sourceText) {
+    const element = textElement("pre", sourceText);
     element.className = SOURCE_CLASS;
     return element;
   }
 
-  /**
-   * A "Called by"/"Calls" list (spec AC6): every entry is a real navigation
-   * target, not just a label — clicking it walks the chain to that method,
-   * revealing it in the tree (or opening its panel directly, when it is not
-   * yet materialised) so a reader can walk upward to a caller or downward
-   * toward the database without leaving the panel.
-   */
-  function navSection(title, edges, index, targetKey, onNavigate) {
-    const list = document.createElement("ul");
-    list.className = "nav-list";
-    for (const edge of edges) {
-      const methodId = edge[targetKey];
-      const method = index.method(methodId);
-      if (!method) {
-        continue;
-      }
-      const owner = index.classOf(method.classId);
-      const item = document.createElement("li");
-      const link = document.createElement("a");
-      link.textContent = (owner ? owner.simpleName + "." : "") + method.name;
-      link.dataset.methodId = methodId;
-      link.addEventListener("click", () => onNavigate(methodId));
-      item.appendChild(link);
-      list.appendChild(item);
-    }
-    return section(title, list);
-  }
-
-  function wireControls(index, view) {
-    const searchInput = document.getElementById("search-input");
-    const layerFilter = document.getElementById("layer-filter");
-    const moduleFilter = document.getElementById("module-filter");
-    const focusButton = document.getElementById("focus-changes-button");
-
-    populateLayerOptions(layerFilter, index);
-    populateModuleOptions(moduleFilter, index);
-
-    searchInput.addEventListener("input", (event) => view.setSearchTerm(event.target.value));
-    layerFilter.addEventListener("change", (event) => view.setLayerFilter(event.target.value));
-    moduleFilter.addEventListener("change", (event) => view.setModuleFilter(event.target.value));
-    focusButton.addEventListener("click", () => {
-      const active = focusButton.classList.toggle("active");
-      view.setFocusOnChanges(active);
-    });
-
-    wireModuleOverview(index);
-    wireThemeToggle();
-  }
-
-  const MODULE_OVERVIEW_BUTTON_ID = "module-overview-button";
-  const MODULE_OVERVIEW_PANEL_ID = "module-overview-panel";
-  const MODULE_OVERVIEW_VISIBLE_CLASS = "visible";
+  // ---------------------------------------------------------------------
+  // Module overview (spec §7, kept from feature/6): "which module depends
+  // on which", from the real aggregated CROSS_MODULE edges.
+  // ---------------------------------------------------------------------
 
   /**
-   * Adds the module-overview control (spec §3.2.2): a header toggle button
-   * and a panel listing "which module depends on which", built from the DOM
-   * rather than the static template — the overview is optional chrome the
-   * base page does not need to declare a slot for.
+   * Projects the raw `moduleDependencies` pairs into overview rows with real
+   * module names — "which module depends on which", resolved from ids to
+   * something a reader recognises without cross-referencing the module list.
+   *
+   * @return one row per aggregated CROSS_MODULE dependency
    */
-  function wireModuleOverview(index) {
-    const header = document.querySelector("header .controls");
-    const button = document.createElement("button");
-    button.id = MODULE_OVERVIEW_BUTTON_ID;
-    button.type = "button";
-    button.textContent = "Module overview";
-    header.appendChild(button);
-
-    const panel = document.createElement("div");
-    panel.id = MODULE_OVERVIEW_PANEL_ID;
-    panel.className = "module-overview-panel";
-    document.getElementById("app").appendChild(panel);
-    renderModuleOverviewPanel(panel, index);
-
-    button.addEventListener("click", () => {
-      const isVisible = panel.classList.toggle(MODULE_OVERVIEW_VISIBLE_CLASS);
-      button.classList.toggle("active", isVisible);
+  function buildModuleOverview(index) {
+    return index.data.moduleDependencies.map((dependency) => {
+      const fromModule = index.module(dependency.fromModuleId);
+      const toModule = index.module(dependency.toModuleId);
+      return {
+        fromModuleId: dependency.fromModuleId,
+        toModuleId: dependency.toModuleId,
+        fromName: fromModule ? fromModule.name : dependency.fromModuleId,
+        toName: toModule ? toModule.name : dependency.toModuleId
+      };
     });
   }
+
+  // ---------------------------------------------------------------------
+  // Theme toggle (spec §7, kept from feature/6).
+  // ---------------------------------------------------------------------
 
   const THEME_STORAGE_KEY = "codemap-theme";
   const THEME_ATTRIBUTE = "data-theme";
   const THEME_LIGHT = "light";
   const THEME_DARK = "dark";
-
-  /**
-   * Adds the light/dark theme toggle. The choice is applied as an attribute
-   * on the document root, so every colour switches through the CSS custom
-   * properties in report.css rather than any rule being rewritten from JS.
-   *
-   * <p>Persistence via `localStorage` is a nice-to-have, not a requirement —
-   * `file://` pages do have a working `localStorage`, but a future embedding
-   * context (e.g. a sandboxed iframe) might not, so a failure here degrades
-   * silently instead of breaking the toggle itself.
-   */
-  function wireThemeToggle() {
-    const header = document.querySelector("header .controls");
-    const button = document.createElement("button");
-    button.id = "theme-toggle-button";
-    button.type = "button";
-    header.appendChild(button);
-
-    const root = document.documentElement;
-    applyTheme(initialTheme(browserThemeEnvironment()), button, root);
-    button.addEventListener("click", () => {
-      const next = root.getAttribute(THEME_ATTRIBUTE) === THEME_DARK ? THEME_LIGHT : THEME_DARK;
-      applyTheme(next, button, root);
-      persistTheme(next);
-    });
-  }
-
-  /** The real `localStorage`/`matchMedia` lookups, isolated so the decision logic can be tested without a DOM. */
-  function browserThemeEnvironment() {
-    return { getStoredTheme: readStoredTheme, prefersLight: prefersLightColorScheme };
-  }
 
   /**
    * Decides the theme to open with: an explicit stored choice always wins;
@@ -1147,55 +1374,107 @@
     button.textContent = theme === THEME_DARK ? "Light theme" : "Dark theme";
   }
 
-  function populateLayerOptions(select, index) {
-    const layers = new Set(index.data.classes.map((c) => c.layer));
-    for (const layer of layers) {
-      const option = document.createElement("option");
-      option.value = layer;
-      option.textContent = layer;
-      select.appendChild(option);
-    }
-  }
+  function wireThemeToggle() {
+    const header = document.querySelector("header .controls");
+    const button = document.createElement("button");
+    button.id = "theme-toggle-button";
+    button.type = "button";
+    header.appendChild(button);
 
-  function populateModuleOptions(select, index) {
-    for (const module of index.data.modules) {
-      const option = document.createElement("option");
-      option.value = module.id;
-      option.textContent = module.name;
-      select.appendChild(option);
-    }
-  }
-
-  /**
-   * Projects the raw `moduleDependencies` pairs into overview rows with real
-   * module names (spec §3.2.2, §3.5) — "which module depends on which",
-   * resolved from ids to something a reader recognises without cross-
-   * referencing the module list by hand.
-   *
-   * @return {Array<{fromModuleId, toModuleId, fromName, toName}>} one row per
-   *         aggregated CROSS_MODULE dependency; a module with no outgoing
-   *         cross-module call contributes no row of its own
-   */
-  function buildModuleOverview(index) {
-    return index.data.moduleDependencies.map((dependency) => {
-      const fromModule = index.module(dependency.fromModuleId);
-      const toModule = index.module(dependency.toModuleId);
-      return {
-        fromModuleId: dependency.fromModuleId,
-        toModuleId: dependency.toModuleId,
-        fromName: fromModule ? fromModule.name : dependency.fromModuleId,
-        toName: toModule ? toModule.name : dependency.toModuleId
-      };
+    const root = document.documentElement;
+    const env = { getStoredTheme: readStoredTheme, prefersLight: prefersLightColorScheme };
+    applyTheme(initialTheme(env), button, root);
+    button.addEventListener("click", () => {
+      const next = root.getAttribute(THEME_ATTRIBUTE) === THEME_DARK ? THEME_LIGHT : THEME_DARK;
+      applyTheme(next, button, root);
+      persistTheme(next);
     });
   }
 
-  /**
-   * Renders the module overview as a simple dependency list — "X depends on
-   * Y" per aggregated CROSS_MODULE relationship. This is deliberately not an
-   * elaborate diagram: the issue calls it "often the first thing a reader
-   * wants", so a plain, always-correct list beats a fancier rendering that
-   * risks drifting from the real edges.
-   */
+  window.CodemapInternal = {
+    EDGE_KIND,
+    CHANGE_STATUS,
+    VISIBILITY,
+    ROOT_PAGE_LABEL,
+    SOURCE_CLASS,
+    TRANSITION_MS,
+    ROOT_MARGIN_X,
+    ROOT_MARGIN_Y,
+    LANE_SPACING,
+    CodemapIndex,
+    groupBy,
+    strongestStatus,
+    visibilityMarker,
+    buildCompartments,
+    boxCssClasses,
+    rowCssClasses,
+    linkCssClasses,
+    ClassBox,
+    DiagramState,
+    DiagramController,
+    DiagramView,
+    assignColumns,
+    orderColumnByBarycentre,
+    routeOrthogonalLink,
+    polylinePath,
+    allocateLanes,
+    buildClassPanelData,
+    buildMethodPanelData,
+    filterEntryPoints,
+    boxHeight,
+    layoutDiagram,
+    BOX_WIDTH,
+    PILL_WIDTH,
+    PILL_HEIGHT,
+    ROW_HEIGHT,
+    HEADER_HEIGHT,
+    buildModuleOverview,
+    THEME_LIGHT,
+    THEME_DARK,
+    THEME_ATTRIBUTE,
+    THEME_STORAGE_KEY,
+    initialTheme,
+    applyTheme
+  };
+
+  // ---------------------------------------------------------------------
+  // Bootstrap: wires the entry-point picker, filters, module overview, and
+  // theme toggle around one {@link DiagramView}.
+  // ---------------------------------------------------------------------
+
+  function bootstrap(data) {
+    const index = new CodemapIndex(data);
+    const view = new DiagramView(index);
+    window.CodemapReport = { index, view };
+    wireEntryPointPicker(index, view);
+    wireModuleOverview(index);
+    wireThemeToggle();
+  }
+
+  const MODULE_OVERVIEW_BUTTON_ID = "module-overview-button";
+  const MODULE_OVERVIEW_PANEL_ID = "module-overview-panel";
+  const MODULE_OVERVIEW_VISIBLE_CLASS = "visible";
+
+  function wireModuleOverview(index) {
+    const header = document.querySelector("header .controls");
+    const button = document.createElement("button");
+    button.id = MODULE_OVERVIEW_BUTTON_ID;
+    button.type = "button";
+    button.textContent = "Module overview";
+    header.appendChild(button);
+
+    const panel = document.createElement("div");
+    panel.id = MODULE_OVERVIEW_PANEL_ID;
+    panel.className = "module-overview-panel";
+    document.getElementById("app").appendChild(panel);
+    renderModuleOverviewPanel(panel, index);
+
+    button.addEventListener("click", () => {
+      const isVisible = panel.classList.toggle(MODULE_OVERVIEW_VISIBLE_CLASS);
+      button.classList.toggle("active", isVisible);
+    });
+  }
+
   function renderModuleOverviewPanel(panel, index) {
     panel.innerHTML = "";
     const overview = buildModuleOverview(index);
@@ -1216,39 +1495,78 @@
     panel.appendChild(list);
   }
 
-  window.CodemapInternal = {
-    NODE_KIND,
-    EDGE_KIND,
-    CHANGE_STATUS,
-    ALREADY_ABOVE_LABEL,
-    ROOT_PAGE_LABEL,
-    NODE_RADIUS,
-    LEVEL_WIDTH,
-    MIN_SIBLING_SPACING,
-    ROOT_MARGIN_X,
-    ROOT_MARGIN_Y,
-    TRANSITION_MS,
-    CodemapIndex,
-    TreeBuilder,
-    GraphView,
-    makeTreeNode,
-    findAncestorMethod,
-    layoutTree,
-    boundingBoxOf,
-    fittingScale,
-    filterModuleRoots,
-    pruneByFilters,
-    nodeMatchesSearch,
-    nodeMatchesLayer,
-    buildModuleOverview,
-    THEME_LIGHT,
-    THEME_DARK,
-    THEME_ATTRIBUTE,
-    THEME_STORAGE_KEY,
-    initialTheme,
-    applyTheme,
-    buildClassPanelData
-  };
+  /**
+   * Wires the entry-point picker (spec 007 §4.1): a filterable list of pills
+   * a reader clicks to open a class box, plus search/layer/module filtering
+   * (spec §7, kept from feature/6).
+   */
+  function wireEntryPointPicker(index, view) {
+    const searchInput = document.getElementById("search-input");
+    const layerFilter = document.getElementById("layer-filter");
+    const moduleFilter = document.getElementById("module-filter");
+
+    populateLayerOptions(layerFilter, index);
+    populateModuleOptions(moduleFilter, index);
+
+    const criteria = { searchTerm: "", layer: "", moduleId: "" };
+    const rerenderPicker = () => renderEntryPointPicker(index, view, criteria);
+
+    searchInput.addEventListener("input", (event) => {
+      criteria.searchTerm = event.target.value;
+      rerenderPicker();
+    });
+    layerFilter.addEventListener("change", (event) => {
+      criteria.layer = event.target.value;
+      rerenderPicker();
+    });
+    moduleFilter.addEventListener("change", (event) => {
+      criteria.moduleId = event.target.value;
+      rerenderPicker();
+    });
+
+    rerenderPicker();
+  }
+
+  function renderEntryPointPicker(index, view, criteria) {
+    const list = document.getElementById("entry-point-list");
+    if (!list) {
+      return;
+    }
+    list.innerHTML = "";
+    const filtered = filterEntryPoints(index.data.entryPoints, index, criteria);
+    for (const entryPoint of filtered) {
+      list.appendChild(entryPointPickerItem(entryPoint, view));
+    }
+  }
+
+  function entryPointPickerItem(entryPoint, view) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = entryPoint.label === "" ? ROOT_PAGE_LABEL : entryPoint.label;
+    button.addEventListener("click", () => view.openEntryPointPill(entryPoint.id));
+    item.appendChild(button);
+    return item;
+  }
+
+  function populateLayerOptions(select, index) {
+    const layers = new Set(index.data.classes.map((c) => c.layer));
+    for (const layer of layers) {
+      const option = document.createElement("option");
+      option.value = layer;
+      option.textContent = layer;
+      select.appendChild(option);
+    }
+  }
+
+  function populateModuleOptions(select, index) {
+    for (const module of index.data.modules) {
+      const option = document.createElement("option");
+      option.value = module.id;
+      option.textContent = module.name;
+      select.appendChild(option);
+    }
+  }
 
   if (DATA) {
     bootstrap(DATA);

@@ -8,7 +8,9 @@ import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.model.ModuleDependency;
 import dev.codemap.core.model.RemovedMethod;
+import dev.codemap.core.parse.ClassSourceReader;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
@@ -30,10 +32,11 @@ public final class ReportViewModelBuilder {
      *         suitable for JSON serialisation
      */
     public ReportViewModel build(CodeIndex index) {
+        Path projectRoot = Path.of(index.root());
         return new ReportViewModel(
                 projectModules(index.modules()),
                 projectEntryPoints(index.entryPoints()),
-                projectClasses(index.classes()),
+                projectClasses(index.classes(), projectRoot),
                 projectMethods(index.methods()),
                 projectEdges(index.calls()),
                 projectModuleDependencies(index.callGraph().moduleDependencies()),
@@ -58,7 +61,7 @@ public final class ReportViewModelBuilder {
                 .toList();
     }
 
-    private List<ClassView> projectClasses(List<IndexedClass> classes) {
+    private List<ClassView> projectClasses(List<IndexedClass> classes, Path projectRoot) {
         return classes.stream()
                 .map(indexedClass -> new ClassView(
                         indexedClass.id(),
@@ -72,8 +75,21 @@ public final class ReportViewModelBuilder {
                         indexedClass.lineStart(),
                         indexedClass.lineEnd(),
                         indexedClass.javadoc(),
-                        indexedClass.status()))
+                        indexedClass.status(),
+                        classSourceOf(indexedClass, projectRoot)))
                 .toList();
+    }
+
+    /**
+     * Reads the class's verbatim declaration text for the side panel.
+     *
+     * <p>Read here rather than stored on {@link IndexedClass} (spec 007 §5.2):
+     * an unreadable file or an invalid line range degrades to an empty string,
+     * never throws, so one odd class must not fail the whole report.
+     */
+    private String classSourceOf(IndexedClass indexedClass, Path projectRoot) {
+        return ClassSourceReader.read(
+                projectRoot, indexedClass.file(), indexedClass.lineStart(), indexedClass.lineEnd());
     }
 
     private List<MethodView> projectMethods(List<IndexedMethod> methods) {
@@ -89,6 +105,7 @@ public final class ReportViewModelBuilder {
                         method.javadoc(),
                         method.source(),
                         method.constructor(),
+                        method.visibility(),
                         method.status()))
                 .toList();
     }

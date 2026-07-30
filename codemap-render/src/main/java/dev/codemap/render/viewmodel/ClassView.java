@@ -22,6 +22,13 @@ import java.util.Objects;
  * @param lineEnd last line of the declaration, inclusive
  * @param javadoc first sentence of the Javadoc, or {@code null} when absent
  * @param status change status (spec §5), or {@code null} when no diff was computed
+ * @param source the verbatim class declaration text, {@code lineStart} to
+ *        {@code lineEnd}, so the side panel can show "the whole class as it
+ *        is" without reading the file at view time (spec 007 §5.2); blank
+ *        when the file could not be read or the line range is invalid — this
+ *        view model field only, never {@code IndexedClass}, so
+ *        {@code index.json} does not double in size by carrying every class
+ *        body next to every method body
  */
 public record ClassView(
         String id,
@@ -35,7 +42,8 @@ public record ClassView(
         int lineStart,
         int lineEnd,
         String javadoc,
-        ChangeStatus status) {
+        ChangeStatus status,
+        String source) {
 
     public ClassView {
         Objects.requireNonNull(id, "id");
@@ -46,5 +54,8 @@ public record ClassView(
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(layer, "layer");
         Objects.requireNonNull(file, "file");
+        if (source == null) {
+            source = "";
+        }
     }
 }

@@ -70,6 +70,10 @@ function stubElement(recordedTransforms) {
     transition: () => chainable,
     duration: () => chainable,
     text: () => chainable,
+    each(callback) {
+      return chainable;
+    },
+    classed: () => chainable,
     node: () => null
   };
   return Object.assign(element, chainable);

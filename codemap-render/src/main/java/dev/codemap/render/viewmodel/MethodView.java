@@ -1,6 +1,7 @@
 package dev.codemap.render.viewmodel;
 
 import dev.codemap.core.model.ChangeStatus;
+import dev.codemap.core.model.Visibility;
 
 import java.util.Objects;
 
@@ -21,6 +22,8 @@ import java.util.Objects;
  * @param javadoc first sentence of the Javadoc, or {@code null} when absent
  * @param source the method's real source text, sliced from the file
  * @param constructor whether this is a constructor rather than a method
+ * @param visibility Java access level, drives the UML `+`/`#`/`~`/`-` row
+ *        marker and which compartment a row is listed or revealed in (spec 007 §5.1)
  * @param status change status (spec §5), or {@code null} when no diff was computed
  */
 public record MethodView(
@@ -34,6 +37,7 @@ public record MethodView(
         String javadoc,
         String source,
         boolean constructor,
+        Visibility visibility,
         ChangeStatus status) {
 
     public MethodView {
@@ -42,5 +46,6 @@ public record MethodView(
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(signature, "signature");
         Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(visibility, "visibility");
     }
 }

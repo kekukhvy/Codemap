@@ -39,11 +39,20 @@ final class ReportPageAssembler {
                   <input type="search" id="search-input" placeholder="Search classes and methods...">
                   <select id="layer-filter"><option value="">All layers</option></select>
                   <select id="module-filter"><option value="">All modules</option></select>
-                  <button id="focus-changes-button">Focus on changes</button>
                 </div>
               </header>
+              <div id="entry-point-panel">
+                <h2>Entry points</h2>
+                <ul id="entry-point-list"></ul>
+              </div>
               <div id="canvas-wrapper">
-                <svg id="graph"></svg>
+                <svg id="graph">
+                  <defs>
+                    <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                      <path d="M 0 0 L 10 5 L 0 10 z"></path>
+                    </marker>
+                  </defs>
+                </svg>
               </div>
               <div id="side-panel"><div class="placeholder">Select a node to see details.</div></div>
             </div>

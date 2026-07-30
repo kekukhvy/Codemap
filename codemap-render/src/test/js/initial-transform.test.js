@@ -1,14 +1,10 @@
 "use strict";
 
 /**
- * Assertions on GraphView's initial viewport placement.
- *
- * The bug a Chrome inspection caught: the viewport `<g>` started with
- * `transform: null`, so the whole tree sat exactly on the SVG's top-left
- * corner and was half clipped, and the zoom behaviour's own transform state
- * disagreed with what was on screen — the first pan/zoom gesture would have
- * jumped. This asserts both: the viewport receives a non-identity initial
- * transform, and the zoom behaviour is told the same value.
+ * Assertions on {@code DiagramView}'s initial viewport placement (spec §7,
+ * kept from feature/6): the viewport must receive a non-identity initial
+ * transform, and the zoom behaviour's internal state must agree with it, or
+ * the first pan/zoom gesture would jump.
  *
  * Run with: node src/test/js/initial-transform.test.js
  */
@@ -34,15 +30,14 @@ function run() {
   const zoomBehaviorTransforms = [];
   const internal = loadReportScript(data, { viewportTransforms, zoomBehaviorTransforms });
   const index = new internal.CodemapIndex(data);
-  const treeBuilder = new internal.TreeBuilder(index);
 
-  new internal.GraphView(index, treeBuilder);
+  new internal.DiagramView(index);
 
   assert.ok(viewportTransforms.length > 0,
       "the viewport must receive an initial transform rather than staying at the implicit identity (null)");
   const initialViewportTransform = viewportTransforms[0];
   assert.ok(initialViewportTransform.x > 0 || initialViewportTransform.y > 0,
-      "the initial transform must move the tree away from the SVG's top-left corner, " +
+      "the initial transform must move the diagram away from the SVG's top-left corner, " +
       `got x=${initialViewportTransform.x}, y=${initialViewportTransform.y}`);
 
   assert.ok(zoomBehaviorTransforms.length > 0,

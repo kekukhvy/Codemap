@@ -13,9 +13,14 @@ import dev.codemap.core.model.IndexedModule;
 import dev.codemap.core.model.Layer;
 import dev.codemap.core.model.SourceLocation;
 import dev.codemap.core.model.TypeKind;
+import dev.codemap.core.model.Visibility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,6 +37,9 @@ class ReportViewModelBuilderTest {
     private static final String METHOD_ID = "com.example.TaskController#create()";
 
     private final ReportViewModelBuilder builder = new ReportViewModelBuilder();
+
+    @TempDir
+    Path projectRoot;
 
     @Test
     @DisplayName("projects modules as top-level roots")
@@ -75,13 +83,82 @@ class ReportViewModelBuilderTest {
                         TypeKind.CLASS, Layer.ENTRY, "TaskController.java", 1, 20, null)))
                 .methods(List.of(new IndexedMethod(
                         METHOD_ID, CLASS_ID, "create", "create()", "TaskController.java", 10, 12, null,
-                        source, false, ChangeStatus.UNCHANGED)))
+                        source, false, Visibility.PUBLIC, ChangeStatus.UNCHANGED)))
                 .build();
 
         ReportViewModel viewModel = builder.build(index);
 
         assertThat(viewModel.methods()).hasSize(1);
         assertThat(viewModel.methods().get(0).source()).isEqualTo(source);
+    }
+
+    @Test
+    @DisplayName("carries method visibility so the diagram can mark public rows and reveal private ones")
+    void projectsMethodVisibility() {
+        CodeIndex index = CodeIndex.builder()
+                .classes(List.of(new IndexedClass(
+                        CLASS_ID, MODULE_ID, "com.example.TaskController", "TaskController", "com.example",
+                        TypeKind.CLASS, Layer.ENTRY, "TaskController.java", 1, 20, null)))
+                .methods(List.of(new IndexedMethod(
+                        METHOD_ID, CLASS_ID, "validate", "validate()", "TaskController.java", 10, 12, null,
+                        "private void validate() { }", false, Visibility.PRIVATE, ChangeStatus.UNCHANGED)))
+                .build();
+
+        ReportViewModel viewModel = builder.build(index);
+
+        assertThat(viewModel.methods().get(0).visibility()).isEqualTo(Visibility.PRIVATE);
+    }
+
+    @Test
+    @DisplayName("embeds the class's real declaration text, sliced from its file")
+    void embedsClassSource() throws IOException {
+        String classSource = """
+                public class TaskController {
+                    public void create() {
+                    }
+                }""";
+        Files.writeString(projectRoot.resolve("TaskController.java"), classSource);
+        CodeIndex index = CodeIndex.builder()
+                .root(projectRoot.toString())
+                .classes(List.of(new IndexedClass(
+                        CLASS_ID, MODULE_ID, "com.example.TaskController", "TaskController", "com.example",
+                        TypeKind.CLASS, Layer.ENTRY, "TaskController.java", 1, 4, null)))
+                .build();
+
+        ReportViewModel viewModel = builder.build(index);
+
+        assertThat(viewModel.classes().get(0).source()).isEqualTo(classSource);
+    }
+
+    @Test
+    @DisplayName("degrades to a blank class source, rather than throwing, when the file cannot be read")
+    void degradesClassSourceWhenFileMissing() {
+        CodeIndex index = CodeIndex.builder()
+                .root(projectRoot.toString())
+                .classes(List.of(new IndexedClass(
+                        CLASS_ID, MODULE_ID, "com.example.TaskController", "TaskController", "com.example",
+                        TypeKind.CLASS, Layer.ENTRY, "Missing.java", 1, 3, null)))
+                .build();
+
+        ReportViewModel viewModel = builder.build(index);
+
+        assertThat(viewModel.classes().get(0).source()).isBlank();
+    }
+
+    @Test
+    @DisplayName("degrades to a blank class source when the declared line range is invalid")
+    void degradesClassSourceWhenLineRangeInvalid() throws IOException {
+        Files.writeString(projectRoot.resolve("TaskController.java"), "public class TaskController {\n}\n");
+        CodeIndex index = CodeIndex.builder()
+                .root(projectRoot.toString())
+                .classes(List.of(new IndexedClass(
+                        CLASS_ID, MODULE_ID, "com.example.TaskController", "TaskController", "com.example",
+                        TypeKind.CLASS, Layer.ENTRY, "TaskController.java", 50, 60, null)))
+                .build();
+
+        ReportViewModel viewModel = builder.build(index);
+
+        assertThat(viewModel.classes().get(0).source()).isBlank();
     }
 
     @Test
@@ -108,7 +185,7 @@ class ReportViewModelBuilderTest {
                         TypeKind.CLASS, Layer.ENTRY, "TaskController.java", 1, 20, null, ChangeStatus.CHANGED)))
                 .methods(List.of(new IndexedMethod(
                         METHOD_ID, CLASS_ID, "create", "create()", "TaskController.java", 10, 12, null,
-                        "void create() { }", false, ChangeStatus.ADDED)))
+                        "void create() { }", false, Visibility.PUBLIC, ChangeStatus.ADDED)))
                 .build();
 
         ReportViewModel viewModel = builder.build(index);
