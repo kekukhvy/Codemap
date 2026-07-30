@@ -14,6 +14,7 @@ import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.Layer;
 import dev.codemap.core.model.TypeKind;
+import dev.codemap.core.model.Visibility;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -160,6 +161,11 @@ public final class JavaSourceParser {
      *
      * <p>Skipped when the record declares the constructor explicitly, which the
      * normal member walk already handles.
+     *
+     * <p>Recorded as {@code PUBLIC}: there is no declaration to read modifiers
+     * from, and a canonical constructor is implicitly public (JLS 8.10.4), so
+     * falling back to the package-private default would hide it from the
+     * report's public compartment.
      */
     private void addCanonicalRecordConstructor(
             TypeDeclaration<?> type, String classId, String file,
@@ -192,7 +198,9 @@ public final class JavaSourceParser {
                 line,
                 null,
                 sourceText.slice(line, line),
-                true));
+                true,
+                Visibility.PUBLIC,
+                null));
     }
 
     /** Builds a method entry, including the source text the report will display. */

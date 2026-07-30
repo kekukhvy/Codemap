@@ -208,6 +208,24 @@ class JavaSourceParserTest {
 
             assertThat(methodNamed(parsedFile, "helper").visibility()).isEqualTo(Visibility.PRIVATE);
         }
+
+        @Test
+        @DisplayName("treats a record's canonical constructor as implicitly public")
+        void canonicalRecordConstructorIsImplicitlyPublic() throws IOException {
+            ParsedFile parsedFile = parse("Pagination.java", """
+                    package com.example;
+
+                    public record Pagination(int limit, int offset) {
+                    }
+                    """);
+
+            IndexedMethod canonical = parsedFile.methods().stream()
+                    .filter(IndexedMethod::constructor)
+                    .findFirst()
+                    .orElseThrow();
+
+            assertThat(canonical.visibility()).isEqualTo(Visibility.PUBLIC);
+        }
     }
 
     @Nested
