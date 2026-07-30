@@ -63,6 +63,45 @@
       this.incomingByTo = groupBy(data.edges, (e) => e.to);
       this.entryPointsByModule = groupBy(data.entryPoints, (e) => e.moduleId);
       this.methodsByClassId = groupBy(data.methods, (m) => m.classId);
+      /** entryPointId -> strongest status anywhere it can reach; computed once. */
+      this.reachableStatusCache = new Map();
+    }
+
+    /**
+     * The strongest change status reachable from an entry point (spec 007 §3).
+     *
+     * <p>The handler's own status is not the interesting question: a PR often
+     * leaves the handler untouched and rewrites the service beneath it. What the
+     * reader wants from the list is "does this endpoint have anything to do with
+     * the diff", which is a property of the whole reachable call chain.
+     *
+     * <p>Cached: this walks the graph, and the picker re-renders on every
+     * keystroke in the search box.
+     */
+    reachableStatusOf(entryPoint) {
+      const cached = this.reachableStatusCache.get(entryPoint.id);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const seen = new Set([entryPoint.methodId]);
+      const stack = [entryPoint.methodId];
+      const statuses = [];
+      while (stack.length > 0) {
+        const methodId = stack.pop();
+        const method = this.method(methodId);
+        if (method && method.status) {
+          statuses.push(method.status);
+        }
+        for (const edge of this.outgoing(methodId)) {
+          if (edge.resolved && !seen.has(edge.to)) {
+            seen.add(edge.to);
+            stack.push(edge.to);
+          }
+        }
+      }
+      const strongest = strongestStatus(statuses);
+      this.reachableStatusCache.set(entryPoint.id, strongest);
+      return strongest;
     }
 
     method(id) {
@@ -150,6 +189,13 @@
     return layer ? "«" + layer.toLowerCase() + "»" : "";
   }
 
+  const ENTRY_POINT_MARKER_CLASS = "entry-point-status";
+  /** Explains the marker on hover, since a glyph alone does not say what it means. */
+  const ENTRY_POINT_STATUS_TITLE = {
+    ADDED: "New on this branch",
+    CHANGED: "Changed on this branch",
+    AFFECTED: "Calls something that changed"
+  };
   const STATUS_GLYPH_CLASS = "status-glyph";
   /** The compartment set a collapsed box renders with: none at all. */
   const EMPTY_COMPARTMENTS = { constructors: [], publicMethods: [], revealedPrivateMethods: [] };
@@ -2799,7 +2845,22 @@
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = entryPoint.label === "" ? ROOT_PAGE_LABEL : entryPoint.label;
+    // Marked by what the whole call chain reaches, not by the handler's own
+    // status: the point of the list is to say which endpoints this diff touches,
+    // and a PR routinely leaves a handler alone while rewriting what it calls.
+    const status = view.index.reachableStatusOf(entryPoint);
+    const glyph = statusGlyph(status);
+    if (glyph) {
+      const marker = document.createElement("span");
+      marker.className = ENTRY_POINT_MARKER_CLASS + " " + glyph.cssClass;
+      marker.textContent = glyph.symbol;
+      marker.title = ENTRY_POINT_STATUS_TITLE[status] || "";
+      button.appendChild(marker);
+      button.classList.add(STATUS_CSS_CLASS[status]);
+    }
+    const label = document.createElement("span");
+    label.textContent = entryPoint.label === "" ? ROOT_PAGE_LABEL : entryPoint.label;
+    button.appendChild(label);
     button.addEventListener("click", () => view.openEntryPointPill(entryPoint.id));
     item.appendChild(button);
     return item;

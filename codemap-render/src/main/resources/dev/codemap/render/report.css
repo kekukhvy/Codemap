@@ -153,6 +153,40 @@ header button.active {
   cursor: pointer;
 }
 
+/* Change marker in the entry-point picker (spec 007 §3): says which endpoints
+   this diff touches anywhere down their call chain, so the reader knows where
+   to start. Same glyph vocabulary as the box headers, and the text colour is a
+   second signal so it reads without relying on colour alone. */
+#entry-point-list button {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+#entry-point-list .entry-point-status {
+  font-size: 10px;
+  font-weight: 700;
+  flex: none;
+}
+
+#entry-point-list button.status-added,
+#entry-point-list button.status-changed {
+  border-color: var(--color-added);
+}
+
+#entry-point-list button.status-added .entry-point-status,
+#entry-point-list button.status-changed .entry-point-status {
+  color: var(--color-added);
+}
+
+#entry-point-list button.status-affected {
+  border-color: var(--color-affected);
+}
+
+#entry-point-list button.status-affected .entry-point-status {
+  color: var(--color-affected);
+}
+
 #entry-point-list button:hover {
   border-color: var(--color-accent);
   color: var(--color-accent);
