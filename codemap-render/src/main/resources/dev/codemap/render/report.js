@@ -641,6 +641,16 @@
   // ---------------------------------------------------------------------
 
   const LANE_SPACING = 14;
+  /** Grid cells the corridor search will consider before falling back. */
+  const CORRIDOR_GRID_BUDGET = 6000;
+  /** Cost of a corner, in pixels-equivalent: fewer turns read more clearly. */
+  const TURN_PENALTY = 40;
+  /** Cost of reusing a segment another link already claimed — steep, but not a ban. */
+  const SHARED_SEGMENT_PENALTY = 4000;
+  /** Pitch at which routes are sampled when reserving and testing occupancy. */
+  const RESERVATION_PITCH = LANE_SPACING;
+  /** How far beyond a route's own extent a box still shapes its grid. */
+  const ROUTE_NEIGHBOURHOOD_PAD = 160;
   const SELF_LINK_LOOP_WIDTH = 36;
 
   /**
@@ -673,10 +683,391 @@
    *        rectangles a routed segment must not cross
    * @return an array of {@code {x, y}} points describing the polyline
    */
-  function routeOrthogonalLink(link, obstacles) {
+  /**
+   * Routes one link, preferring a corridor-grid path that is provably clear of
+   * every box (spec 007 §6.4.3, AC11) and steers away from segments already
+   * taken by links routed before it.
+   *
+   * <p>`reserved` is a set of segment keys claimed by earlier links. Sharing one
+   * is not forbidden — sometimes there is genuinely one way through — but it
+   * costs, so the search only doubles up when the alternative is worse. That is
+   * what a fixed point template could not do at all: it has no notion of what
+   * any other link is doing, so parallel links collapsed onto one another.
+   */
+  function routeOrthogonalLink(link, obstacles, reserved) {
     if (link.selfLink) {
       return routeSelfLink(link, obstacles);
     }
+    const searched = searchCorridorPath(link, obstacles, reserved || new Set());
+    if (searched) {
+      return searched;
+    }
+    return routeByTemplate(link, obstacles);
+  }
+
+  /**
+   * Least-cost orthogonal path over a grid built from the box edges.
+   *
+   * <p>Every candidate segment is checked against every obstacle, so a path that
+   * exists is clear by construction rather than by after-the-fact detours. Cost
+   * is distance plus a turn penalty (fewer corners read better) plus a heavy
+   * penalty for reusing a segment another link already claimed — which is what
+   * keeps parallel links on separate tracks without hard-coding a lane shape.
+   *
+   * <p>The source and target boxes join the obstacle set with their attachment
+   * row punched through, so a path may reach that one row but cannot cross the
+   * box anywhere else.
+   *
+   * @return the polyline, or `null` if the grid admits no clear path
+   */
+  function searchCorridorPath(link, obstacles, reserved) {
+    const start = { x: link.from.rect.x + link.from.rect.width, y: link.from.rowY };
+    const walls = obstacles
+        .concat(splitAroundRow(link.from.rect, link.from.rowY))
+        .concat(splitAroundRow(link.to.rect, link.to.rowY));
+
+    // Both target edges are viable; the search picks whichever is cheaper, which
+    // is how forward, same-column and backward links stay one code path.
+    const ends = [
+      { x: link.to.rect.x, y: link.to.rowY },
+      { x: link.to.rect.x + link.to.rect.width, y: link.to.rowY }
+    ];
+
+    // Only boxes near the route shape the grid. A whole 50-box diagram yields a
+    // grid of over a million cells — the search then exceeded its budget and
+    // bailed out on every link, silently handing all of them to the template.
+    const near = wallsNearRoute(walls, start, ends);
+    const xs = gridLines([start.x, ...ends.map((e) => e.x)], near, link.lane, (r) => [r.x, r.x + r.width]);
+    const ys = gridLines([start.y, ...ends.map((e) => e.y)], near, link.lane, (r) => [r.y, r.y + r.height]);
+    if (xs.length * ys.length > CORRIDOR_GRID_BUDGET) {
+      return null;
+    }
+
+    let best = null;
+    const blocked = new Map();
+    for (const end of ends) {
+      const path = dijkstraGrid(start, end, xs, ys, walls, reserved, blocked);
+      if (path && (!best || path.cost < best.cost)) {
+        best = path;
+      }
+    }
+    return best ? dedupeConsecutivePoints(dropCollinearPoints(best.points)) : null;
+  }
+
+  /**
+   * The walls whose edges are worth turning into grid lines: those overlapping
+   * the route's bounding box, generously padded.
+   *
+   * <p>Collision testing still uses every wall — this only decides which ones
+   * contribute candidate lines, since the grid is the product of both axes and
+   * grows quadratically with them.
+   */
+  function wallsNearRoute(walls, start, ends) {
+    const pad = ROUTE_NEIGHBOURHOOD_PAD;
+    const minX = Math.min(start.x, ...ends.map((end) => end.x)) - pad;
+    const maxX = Math.max(start.x, ...ends.map((end) => end.x)) + pad;
+    const minY = Math.min(start.y, ...ends.map((end) => end.y)) - pad;
+    const maxY = Math.max(start.y, ...ends.map((end) => end.y)) + pad;
+    return walls.filter((wall) => wall.rect.x <= maxX && wall.rect.x + wall.rect.width >= minX
+        && wall.rect.y <= maxY && wall.rect.y + wall.rect.height >= minY);
+  }
+
+  /**
+   * Grid lines: the fixed endpoints, every nearby box edge pushed out by this
+   * link's lane offset, and a track either side of each endpoint.
+   *
+   * <p>Several offsets rather than only this link's own: the search needs
+   * somewhere else to go when its first choice is taken, and a grid derived from
+   * a single offset gives parallel links no alternative but to overlap.
+   */
+  function gridLines(fixedValues, walls, lane, edgesOf) {
+    const values = new Set(fixedValues);
+    const offset = LANE_SPACING * (lane + 1);
+    for (const wall of walls) {
+      const [low, high] = edgesOf(wall.rect);
+      values.add(low - offset);
+      values.add(high + offset);
+    }
+    // A couple of tracks stepped off the endpoints give the search somewhere to
+    // go when its first choice is taken. Kept to two: the grid is the product of
+    // both axes, so every extra line per axis costs quadratically, and on a real
+    // 50-box diagram a generous grid blew past the budget and the search bailed
+    // out on every single link.
+    for (const fixed of fixedValues) {
+      values.add(fixed + offset);
+      values.add(fixed - offset);
+    }
+    return dedupeSortedValues([...values].sort((a, b) => a - b));
+  }
+
+  /**
+   * Drops grid lines closer together than a pixel. Two lines a fraction apart
+   * offer the search no route it does not already have, but each one multiplies
+   * the cell count against the other axis.
+   */
+  function dedupeSortedValues(sorted) {
+    const kept = [];
+    for (const value of sorted) {
+      if (kept.length === 0 || value - kept[kept.length - 1] >= 1) {
+        kept.push(value);
+      }
+    }
+    return kept;
+  }
+
+  /**
+   * Records every unit of a routed polyline as occupied.
+   *
+   * <p>The search sees the grid's own short segments, while the finished path has
+   * had its collinear midpoints dropped into long ones. Reserving only the long
+   * ones would never match a grid step, so the penalty would never fire — the
+   * bug that let parallel links keep collapsing together. Sampling the polyline
+   * at a fixed pitch makes the two views agree.
+   */
+  function reserveTraversedSegments(points, reserved) {
+    for (let i = 0; i + 1 < points.length; i++) {
+      forEachOccupiedCell(points[i], points[i + 1], (cell) => reserved.add(cell));
+    }
+  }
+
+  /**
+   * Calls back with a key per unit of ground a segment covers.
+   *
+   * <p>Keyed as (axis, line, cell-index-along-the-line) rather than as a whole
+   * segment: the search walks grid lines whose coordinates never coincide with a
+   * finished polyline's, so comparing segments end-to-end never matched and the
+   * shared-segment penalty silently never fired.
+   */
+  function forEachOccupiedCell(from, to, visit) {
+    const vertical = Math.round(from.x) === Math.round(to.x);
+    const line = vertical ? Math.round(from.x) : Math.round(from.y);
+    const low = vertical ? Math.min(from.y, to.y) : Math.min(from.x, to.x);
+    const high = vertical ? Math.max(from.y, to.y) : Math.max(from.x, to.x);
+    const axis = vertical ? "V" : "H";
+    const firstCell = Math.floor(low / RESERVATION_PITCH);
+    const lastCell = Math.floor(high / RESERVATION_PITCH);
+    for (let cell = firstCell; cell <= lastCell; cell++) {
+      visit(axis + line + ":" + cell);
+    }
+  }
+
+  /**
+   * Whether a candidate step would run along ground another link already holds.
+   *
+   * <p>Sampled the same way reservations are recorded, so a grid step of any
+   * length is compared against the same pitch — an exact key match would miss
+   * every step whose endpoints do not happen to coincide with the earlier link's.
+   */
+  function overlapsReserved(from, to, reserved) {
+    if (reserved.size === 0) {
+      return false;
+    }
+    let occupied = false;
+    forEachOccupiedCell(from, to, (cell) => {
+      if (reserved.has(cell)) {
+        occupied = true;
+      }
+    });
+    return occupied;
+  }
+
+  /** Segment key used both to reserve a segment and to detect reuse of one. */
+  function segmentKey(a, b) {
+    const ends = [[Math.round(a.x), Math.round(a.y)], [Math.round(b.x), Math.round(b.y)]]
+        .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    return ends.map((point) => point.join(",")).join("|");
+  }
+
+  /** A binary min-heap, keyed by the supplied cost function. */
+  class MinHeap {
+    constructor(costOf) {
+      this.costOf = costOf;
+      this.items = [];
+    }
+
+    get size() {
+      return this.items.length;
+    }
+
+    push(item) {
+      this.items.push(item);
+      let index = this.items.length - 1;
+      while (index > 0) {
+        const parent = (index - 1) >> 1;
+        if (this.costOf(this.items[parent]) <= this.costOf(this.items[index])) {
+          break;
+        }
+        this.swap(parent, index);
+        index = parent;
+      }
+    }
+
+    pop() {
+      const top = this.items[0];
+      const last = this.items.pop();
+      if (this.items.length > 0) {
+        this.items[0] = last;
+        this.sinkDown(0);
+      }
+      return top;
+    }
+
+    sinkDown(start) {
+      let index = start;
+      for (;;) {
+        const left = index * 2 + 1;
+        const right = left + 1;
+        let smallest = index;
+        if (left < this.items.length && this.costOf(this.items[left]) < this.costOf(this.items[smallest])) {
+          smallest = left;
+        }
+        if (right < this.items.length && this.costOf(this.items[right]) < this.costOf(this.items[smallest])) {
+          smallest = right;
+        }
+        if (smallest === index) {
+          return;
+        }
+        this.swap(smallest, index);
+        index = smallest;
+      }
+    }
+
+    swap(left, right) {
+      const held = this.items[left];
+      this.items[left] = this.items[right];
+      this.items[right] = held;
+    }
+  }
+
+  /** Least-cost walk over the grid. Returns `{points, cost}` or `null`. */
+  function dijkstraGrid(start, end, xs, ys, walls, reserved, blocked) {
+    const startXi = xs.indexOf(start.x);
+    const startYi = ys.indexOf(start.y);
+    const endXi = xs.indexOf(end.x);
+    const endYi = ys.indexOf(end.y);
+    if (startXi < 0 || startYi < 0 || endXi < 0 || endYi < 0) {
+      return null;
+    }
+
+    const key = (xi, yi) => xi * ys.length + yi;
+    const best = new Map([[key(startXi, startYi), 0]]);
+    const cameFrom = new Map([[key(startXi, startYi), null]]);
+    // A real heap, not a re-sorted array: on a 50-box diagram sorting the
+    // frontier every iteration cost seconds per render.
+    const frontier = new MinHeap((node) => node.cost);
+    frontier.push({ xi: startXi, yi: startYi, cost: 0, horizontal: null });
+
+    while (frontier.size > 0) {
+      const current = frontier.pop();
+      if (current.xi === endXi && current.yi === endYi) {
+        return { points: tracePath(cameFrom, current, xs, ys, key), cost: current.cost };
+      }
+      if (current.cost > (best.get(key(current.xi, current.yi)) ?? Infinity)) {
+        continue;
+      }
+      for (const step of gridSteps(current, xs, ys, walls, reserved, blocked)) {
+        const stepKey = key(step.xi, step.yi);
+        if (step.cost < (best.get(stepKey) ?? Infinity)) {
+          best.set(stepKey, step.cost);
+          cameFrom.set(stepKey, current);
+          frontier.push(step);
+        }
+      }
+    }
+    return null;
+  }
+
+  /** The four axis-aligned steps whose segment clears every wall, with their costs. */
+  function gridSteps(node, xs, ys, walls, reserved, blocked) {
+    const candidates = [
+      { xi: node.xi + 1, yi: node.yi }, { xi: node.xi - 1, yi: node.yi },
+      { xi: node.xi, yi: node.yi + 1 }, { xi: node.xi, yi: node.yi - 1 }
+    ];
+    const from = { x: xs[node.xi], y: ys[node.yi] };
+    const steps = [];
+    for (const candidate of candidates) {
+      if (candidate.xi < 0 || candidate.xi >= xs.length || candidate.yi < 0 || candidate.yi >= ys.length) {
+        continue;
+      }
+      const to = { x: xs[candidate.xi], y: ys[candidate.yi] };
+      // Each grid edge is tested against every wall, and the search revisits
+      // edges constantly, so the verdict is memoised per edge.
+      const edgeKey = node.xi + "," + node.yi + ">" + candidate.xi + "," + candidate.yi;
+      let isBlocked = blocked.get(edgeKey);
+      if (isBlocked === undefined) {
+        isBlocked = walls.some((wall) => segmentCrossesRect(from, to, wall.rect));
+        blocked.set(edgeKey, isBlocked);
+      }
+      if (isBlocked) {
+        continue;
+      }
+      const horizontal = candidate.yi === node.yi;
+      let cost = node.cost + Math.abs(to.x - from.x) + Math.abs(to.y - from.y);
+      if (node.horizontal !== null && node.horizontal !== horizontal) {
+        cost += TURN_PENALTY;
+      }
+      if (overlapsReserved(from, to, reserved)) {
+        cost += SHARED_SEGMENT_PENALTY;
+      }
+      steps.push({ xi: candidate.xi, yi: candidate.yi, cost, horizontal });
+    }
+    return steps;
+  }
+
+  /** Walks parent links back to the start. */
+  function tracePath(cameFrom, endNode, xs, ys, key) {
+    const points = [];
+    let cursor = endNode;
+    while (cursor) {
+      points.unshift({ x: xs[cursor.xi], y: ys[cursor.yi] });
+      cursor = cameFrom.get(key(cursor.xi, cursor.yi));
+    }
+    return points;
+  }
+
+  /**
+   * An endpoint box as the parts of itself above and below its attachment row,
+   * so a path can reach that row from either side without crossing the box.
+   */
+  function splitAroundRow(rect, rowY) {
+    const parts = [];
+    const gap = LANE_SPACING / 2;
+    const aboveHeight = rowY - gap - rect.y;
+    if (aboveHeight > 0) {
+      parts.push({ rect: { x: rect.x, y: rect.y, width: rect.width, height: aboveHeight } });
+    }
+    const belowY = rowY + gap;
+    const belowHeight = rect.y + rect.height - belowY;
+    if (belowHeight > 0) {
+      parts.push({ rect: { x: rect.x, y: belowY, width: rect.width, height: belowHeight } });
+    }
+    return parts;
+  }
+
+  /** Whether an axis-aligned segment penetrates a rectangle's interior. */
+  function segmentCrossesRect(a, b, rect) {
+    const pad = 0.5;
+    return Math.min(a.x, b.x) < rect.x + rect.width - pad && Math.max(a.x, b.x) > rect.x + pad
+        && Math.min(a.y, b.y) < rect.y + rect.height - pad && Math.max(a.y, b.y) > rect.y + pad;
+  }
+
+  /** Collapses runs of points on one straight line into their two ends. */
+  function dropCollinearPoints(points) {
+    return points.filter((point, index) => {
+      if (index === 0 || index === points.length - 1) {
+        return true;
+      }
+      const previous = points[index - 1];
+      const next = points[index + 1];
+      return !((previous.x === point.x && point.x === next.x) || (previous.y === point.y && point.y === next.y));
+    });
+  }
+
+  /**
+   * The original fixed-shape route, kept as the fallback for a link the grid
+   * search cannot solve (a degenerate layout, or a grid over budget).
+   */
+  function routeByTemplate(link, obstacles) {
     const sourceY = link.from.rowY;
     const targetY = link.to.rowY;
     const sourceExitX = link.from.rect.x + link.from.rect.width;
@@ -1621,7 +2012,7 @@
     drawLinks() {
       const routable = this.renderableLinks().map((link) => this.resolveEndpoints(link)).filter((link) => link !== null);
       const lanes = assignLanesByGap(routable, (link) => link.gapKey);
-      const links = routable.map((link) => this.routedLink(link, lanes.get(link.id)));
+      const links = this.routeAllLinks(routable, lanes);
       const selection = this.viewport.selectAll("path.class-link").data(links, (d) => d.id);
       selection.exit().remove();
       const entered = selection.enter().append("path");
@@ -1693,15 +2084,37 @@
       return { classId: this.openPillId, rect, rowY: rect.y + rect.height / 2 };
     }
 
+    /**
+     * Routes every link, one after another, carrying forward the segments each
+     * one claims.
+     *
+     * <p>Order matters, so it is made deterministic — sorted by id — rather than
+     * left to whatever order expansion happened to produce. Routing each link in
+     * isolation is what let two of them land on identical segments: neither
+     * could see the other.
+     */
+    routeAllLinks(routable, lanes) {
+      const reserved = new Set();
+      const ordered = [...routable].sort((left, right) => left.id.localeCompare(right.id));
+      const routed = new Map();
+      for (const link of ordered) {
+        const result = this.routedLink(link, lanes.get(link.id), reserved);
+        reserveTraversedSegments(result.points, reserved);
+        routed.set(link.id, result);
+      }
+      // Restore the caller's order so the DOM join stays stable.
+      return routable.map((link) => routed.get(link.id));
+    }
+
     /** Routes one resolved link at its allocated lane (spec 007 §6.4), avoiding every other currently-drawn box. */
-    routedLink(link, lane) {
+    routedLink(link, lane, reserved) {
       const obstacles = this.obstaclesBetween(link.sourcePosition, link.targetPosition);
       const points = routeOrthogonalLink({
         from: link.sourcePosition,
         to: link.targetPosition,
         lane,
         selfLink: link.selfLink
-      }, obstacles);
+      }, obstacles, reserved);
       return { ...link, points };
     }
 
@@ -1961,6 +2374,8 @@
     routeOrthogonalLink,
     polylinePath,
     allocateLanes,
+    reserveTraversedSegments,
+    searchCorridorPath,
     assignLanesByGap,
     buildClassPanelData,
     buildMethodPanelData,
