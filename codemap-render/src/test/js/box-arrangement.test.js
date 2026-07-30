@@ -69,6 +69,7 @@ function run() {
   testACollapsedBoxCanBeReopened();
   testDroppingOnANeighbourPushesItOutOfTheWay();
   testRoutesKeepClearOfBoxBordersWhenThereIsRoom();
+  testPilingEveryBoxOnOneSpotStillSeparatesThem();
   testHeaderControlsHaveAFingerSizedHitArea();
 
   console.log("box-arrangement.test.js: all assertions passed");
@@ -261,6 +262,36 @@ function testHeaderControlsHaveAFingerSizedHitArea() {
     assert.ok(Number(area.getAttribute("height")) >= 20,
         "a hit area must be taller than the glyph it stands behind");
   }
+}
+
+/**
+ * Exempting every dragged box from separation meant that dragging several onto
+ * one spot left them permanently stacked. Only the first keeps its exact
+ * position; the rest give way, because an illegible pile serves nobody.
+ */
+function testPilingEveryBoxOnOneSpotStillSeparatesThem() {
+  const internal = loadReportScript(EMPTY);
+  const boxPositions = new Map();
+  const offsets = new Map();
+  for (let i = 0; i < 8; i++) {
+    const id = "box" + i;
+    boxPositions.set(id, { rect: { x: 100, y: i * 200, width: 220, height: 60 }, column: 1, compartments: {} });
+    offsets.set(id, { x: 0, y: -i * 200 });   // every box dropped on y = 0
+  }
+
+  const moved = internal.applyBoxOffsets({ pillRect: { x: 0, y: 0, width: 10, height: 10 }, boxPositions }, offsets);
+
+  const rects = [...moved.boxPositions.values()].map((p) => p.rect);
+  let overlapping = 0;
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i], b = rects[j];
+      if (a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y) {
+        overlapping++;
+      }
+    }
+  }
+  assert.strictEqual(overlapping, 0, "boxes piled on one spot must still be separated");
 }
 
 run();

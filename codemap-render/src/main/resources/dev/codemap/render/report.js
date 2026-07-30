@@ -749,7 +749,7 @@
   /** How far beyond a route's own extent a box still shapes its grid. */
   const ROUTE_NEIGHBOURHOOD_PAD = 160;
   /** Attempts to push a box clear of its neighbours before giving up. */
-  const OVERLAP_RESOLUTION_ATTEMPTS = 12;
+  const OVERLAP_RESOLUTION_ATTEMPTS = 40;
   const SELF_LINK_LOOP_WIDTH = 36;
 
   /**
@@ -1795,9 +1795,16 @@
 
     const settled = [];
     const result = new Map();
+    let first = true;
     for (const [classId, position] of entries) {
       let rect = position.rect;
-      if (!offsets.has(classId)) {
+      // The first dragged box holds its place absolutely — that is the one the
+      // reader just put down. Everything else gives way, dragged or not:
+      // exempting every dragged box meant piling several onto one spot left
+      // them permanently stacked, which is worse than not honouring a drag that
+      // was going to be illegible anyway.
+      const immovable = first && offsets.has(classId);
+      if (!immovable) {
         for (let attempt = 0; attempt < OVERLAP_RESOLUTION_ATTEMPTS; attempt++) {
           const clash = settled.find((other) => rectsOverlap(rect, other));
           if (!clash) {
@@ -1806,6 +1813,7 @@
           rect = { ...rect, y: clash.y + clash.height + BOX_VERTICAL_GAP };
         }
       }
+      first = false;
       settled.push(rect);
       result.set(classId, { ...position, rect });
     }
