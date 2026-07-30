@@ -612,8 +612,16 @@
       return parents.reduce((sum, position) => sum + position, 0) / parents.length;
     };
     return [...boxIdsInColumn].sort((a, b) => {
-      const diff = barycentreOf(a) - barycentreOf(b);
-      return diff !== 0 ? diff : a.localeCompare(b);
+      // Two parentless boxes both score POSITIVE_INFINITY, and Infinity-Infinity
+      // is NaN — which is neither 0 nor a usable ordering, so comparing the
+      // scores directly let the tie-break fall through and the order follow
+      // whatever sequence the reader happened to click in.
+      const left = barycentreOf(a);
+      const right = barycentreOf(b);
+      if (left !== right) {
+        return left < right ? -1 : 1;
+      }
+      return a.localeCompare(b);
     });
   }
 
@@ -1001,6 +1009,14 @@
   // ---------------------------------------------------------------------
 
   const BOX_WIDTH = 220;
+  /** A box may grow this wide to fit its rows before labels get shortened instead. */
+  const BOX_MAX_WIDTH = 420;
+  /** Approximate advance width of one character at the row font size. */
+  const CHAR_WIDTH = 6.2;
+  /** Row text starts here; the expander needs this much clear on the right. */
+  const ROW_TEXT_X = 12;
+  const ROW_EXPANDER_RESERVE = 30;
+  const ELLIPSIS = "…";
   const COLUMN_GAP = 90;
   const ROW_HEIGHT = 20;
   const HEADER_HEIGHT = 26;
@@ -1010,6 +1026,67 @@
   const PILL_HEIGHT = 34;
   /** Baseline drop from a row's top edge to its text, so glyph and label align. */
   const ROW_LABEL_BASELINE_OFFSET = 14;
+
+  /** The full, unshortened text of one member row. */
+  function fullMemberRowLabel(method) {
+    return visibilityMarker(method.visibility) + " " + method.signature;
+  }
+
+  /** How many characters fit in a row of a box `boxWidth` wide. */
+  function rowCharacterBudget(boxWidth) {
+    return Math.max(8, Math.floor((boxWidth - ROW_TEXT_X - ROW_EXPANDER_RESERVE) / CHAR_WIDTH));
+  }
+
+  /**
+   * The row text as drawn: shortened to fit the box.
+   *
+   * <p>Real signatures run long — a handler constructor taking six use-cases is
+   * 164 characters, and over half of Kairos's rows exceed a fixed 220px box. The
+   * parameter list is where the length lives and is the least load-bearing part
+   * of the row, so it collapses first; the method name always survives. The
+   * untruncated signature stays one click away in the side panel.
+   */
+  function memberRowLabel(method, boxWidth) {
+    const full = fullMemberRowLabel(method);
+    const budget = rowCharacterBudget(boxWidth);
+    if (full.length <= budget) {
+      return full;
+    }
+    const open = full.indexOf("(");
+    const close = full.lastIndexOf(")");
+    if (open > 0 && close > open) {
+      // Collapse the parameter list first — it carries the length and is the
+      // least load-bearing part of the row. `tail` keeps the return type, which
+      // sits after ")" and must be counted against the budget too.
+      const head = full.slice(0, open + 1);
+      const tail = full.slice(close);
+      const inner = budget - head.length - tail.length;
+      if (inner >= ELLIPSIS.length) {
+        const params = full.slice(open + 1, close);
+        return head + params.slice(0, inner - ELLIPSIS.length) + ELLIPSIS + tail;
+      }
+      // Even an empty parameter list does not fit: drop the return type too,
+      // then hard-truncate. The method name is what must survive.
+      const collapsed = head + ELLIPSIS + ")";
+      if (collapsed.length <= budget) {
+        return collapsed;
+      }
+    }
+    return full.slice(0, Math.max(1, budget - ELLIPSIS.length)) + ELLIPSIS;
+  }
+
+  /**
+   * The width a box needs for its widest row, capped at {@link BOX_MAX_WIDTH}.
+   * Sizing to content keeps short boxes compact while stopping long signatures
+   * from spilling across the canvas and over the expander.
+   */
+  function boxWidthFor(compartments, className) {
+    const rows = [...compartments.constructors, ...compartments.publicMethods, ...compartments.revealedPrivateMethods];
+    const longest = rows.reduce((widest, method) => Math.max(widest, fullMemberRowLabel(method).length),
+        (className || "").length);
+    const needed = ROW_TEXT_X + longest * CHAR_WIDTH + ROW_EXPANDER_RESERVE;
+    return Math.round(Math.min(BOX_MAX_WIDTH, Math.max(BOX_WIDTH, needed)));
+  }
 
   /** The pixel height a box needs for its current compartments (spec 007 §2.2). */
   function boxHeight(compartments) {
@@ -1039,10 +1116,17 @@
     const boxPositions = new Map();
     const parentPositions = { [rootPillId]: 0 };
     const maxColumn = Math.max(0, ...classIds.map((id) => columns.get(id)));
-    for (let column = 1; column <= maxColumn; column++) {
+    // Starts at 0, not 1: a box no link reaches falls back to column 0, and
+    // skipping that column would leave it in the model but never drawn —
+    // present, unreachable, and impossible to collapse.
+    let columnX = ROOT_MARGIN_X + PILL_WIDTH + COLUMN_GAP;
+    for (let column = 0; column <= maxColumn; column++) {
       const boxesInColumn = byColumn.get(column) || [];
+      if (boxesInColumn.length === 0) {
+        continue;
+      }
       const ordered = orderColumnByBarycentre(boxesInColumn, links, parentPositions);
-      placeColumn(ordered, column, diagram, index, boxPositions, parentPositions);
+      columnX = placeColumn(ordered, column, columnX, diagram, index, boxPositions, parentPositions);
     }
     const pillRect = { x: ROOT_MARGIN_X, y: ROOT_MARGIN_Y, width: PILL_WIDTH, height: PILL_HEIGHT };
     return { boxPositions, pillRect };
@@ -1079,18 +1163,28 @@
     }
   }
 
-  function placeColumn(orderedClassIds, column, diagram, index, boxPositions, parentPositions) {
+  /**
+   * Places one column's boxes, returning the x where the next column starts.
+   *
+   * <p>Boxes are sized to their content, so a column is as wide as its widest
+   * box and the caller carries the running offset — a fixed stride would let a
+   * wide box overlap the column beside it.
+   */
+  function placeColumn(orderedClassIds, column, columnX, diagram, index, boxPositions, parentPositions) {
     let cursorY = ROOT_MARGIN_Y;
-    const columnX = ROOT_MARGIN_X + PILL_WIDTH + COLUMN_GAP + (column - 1) * (BOX_WIDTH + COLUMN_GAP);
+    let columnWidth = BOX_WIDTH;
     for (const classId of orderedClassIds) {
       const box = diagram.boxFor(classId);
       const compartments = buildCompartments(index, classId, box.revealedPrivateMethodIds);
       const height = boxHeight(compartments);
-      const rect = { x: columnX, y: cursorY, width: BOX_WIDTH, height };
+      const width = boxWidthFor(compartments, index.classOf(classId) && index.classOf(classId).simpleName);
+      columnWidth = Math.max(columnWidth, width);
+      const rect = { x: columnX, y: cursorY, width, height };
       boxPositions.set(classId, { rect, column, compartments });
       parentPositions[classId] = cursorY;
       cursorY += height + BOX_VERTICAL_GAP;
     }
+    return columnX + columnWidth + COLUMN_GAP;
   }
 
   // ---------------------------------------------------------------------
@@ -1378,7 +1472,7 @@
     renderMemberRow(group, d, method, y, isPrivateCompartment) {
       const underlined = this.underlinedMethodIds.has(method.id);
       const classes = rowCssClasses(method.status, underlined).concat(isPrivateCompartment ? ["member-row-private"] : []);
-      const label = visibilityMarker(method.visibility) + " " + method.signature;
+      const label = memberRowLabel(method, d.rect.width);
       group.append("text").attr("class", classes.join(" ")).attr(MEMBER_ROW_METHOD_ID_ATTRIBUTE, method.id)
           .attr("x", 12).attr("y", y + ROW_LABEL_BASELINE_OFFSET).text(label)
           .on("click", () => this.navigateToMethod(method.id));
@@ -1762,8 +1856,11 @@
     buildMethodPanelData,
     filterEntryPoints,
     boxHeight,
+    boxWidthFor,
+    memberRowLabel,
     layoutDiagram,
     BOX_WIDTH,
+    BOX_MAX_WIDTH,
     PILL_WIDTH,
     PILL_HEIGHT,
     ROW_HEIGHT,
