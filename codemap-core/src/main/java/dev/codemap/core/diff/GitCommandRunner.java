@@ -25,6 +25,7 @@ public final class GitCommandRunner {
     private static final Logger log = LoggerFactory.getLogger(GitCommandRunner.class);
 
     private static final String GIT_BINARY = "git";
+    private static final String GIT_NOT_FOUND = "git executable not found on PATH";
     private static final long TIMEOUT_SECONDS = 30;
     private static final String TIMED_OUT = "command timed out after " + TIMEOUT_SECONDS + "s";
     private static final String INTERRUPTED = "command was interrupted";
@@ -38,30 +39,16 @@ public final class GitCommandRunner {
      *         {@code false} for a missing binary, a non-zero exit, or a timeout
      */
     public GitCommandResult run(Path workingDirectory, String... arguments) {
-        return runTool(GIT_BINARY, workingDirectory, arguments);
-    }
-
-    /**
-     * Runs an arbitrary command-line tool with the same guarantees as git: both
-     * streams drained concurrently, a hard timeout, and a missing binary
-     * reported as a failed result rather than an exception.
-     *
-     * @param binary executable to run, resolved on {@code PATH}
-     * @param workingDirectory directory to run it in
-     * @param arguments arguments passed to the binary
-     * @return the outcome, never {@code null}
-     */
-    public GitCommandResult runTool(String binary, Path workingDirectory, String... arguments) {
         List<String> command = new ArrayList<>();
-        command.add(binary);
+        command.add(GIT_BINARY);
         command.addAll(List.of(arguments));
 
         ProcessBuilder processBuilder = new ProcessBuilder(command).directory(workingDirectory.toFile());
         try {
             return execute(processBuilder, command);
         } catch (IOException e) {
-            log.warn("Could not run {}: {}", binary, e.getMessage());
-            return new GitCommandResult(false, "", binary + " executable not found on PATH");
+            log.warn("Could not run git: {}", e.getMessage());
+            return new GitCommandResult(false, "", GIT_NOT_FOUND);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new GitCommandResult(false, "", INTERRUPTED);

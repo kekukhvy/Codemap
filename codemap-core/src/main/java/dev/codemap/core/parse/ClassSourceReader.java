@@ -3,6 +3,7 @@ package dev.codemap.core.parse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 
@@ -60,18 +61,25 @@ public final class ClassSourceReader {
      *
      * <p>{@link Path#resolve} alone is not enough: it neither normalises
      * {@code ..} segments nor rejects absolute paths, and an absolute argument
-     * discards the root entirely. Since the path arrives from {@code index.json}
-     * — a cache file on disk, not reviewed code — a tampered or hand-edited index
-     * could otherwise make the next run embed arbitrary readable files into a
-     * {@code report.html} that is meant to be shared.
+     * discards the root entirely.
      *
-     * @return the resolved file, or {@code null} when it escapes the root or the
-     *         path is malformed
+     * <p>{@link Path#normalize} is not enough either — it is purely lexical, so
+     * a path that looks contained can still be a symlink pointing anywhere. That
+     * needs no tampering to reach: a repository can simply contain
+     * {@code Config.java} as a link to {@code ~/.ssh/id_rsa}, and the file walk
+     * enumerates symlinked files. The reviewer then attaches a report with the
+     * key inside it to the pull request, so the secret leaves by hand and the
+     * report's network restrictions never come into it. Resolution therefore
+     * goes through {@link Path#toRealPath}, which follows links before the
+     * containment check.
+     *
+     * @return the resolved file, or {@code null} when it escapes the root, does
+     *         not exist, or the path is malformed
      */
     private static Path resolveInsideRoot(Path projectRoot, String relativeFile) {
         try {
-            Path root = projectRoot.toAbsolutePath().normalize();
-            Path resolved = root.resolve(relativeFile).normalize();
+            Path root = projectRoot.toRealPath();
+            Path resolved = root.resolve(relativeFile).toRealPath();
             if (!resolved.startsWith(root)) {
                 log.warn("Refusing to read {}: it resolves outside the project root", relativeFile);
                 return null;
@@ -79,6 +87,11 @@ public final class ClassSourceReader {
             return resolved;
         } catch (InvalidPathException e) {
             log.warn("Refusing to read malformed path {}: {}", relativeFile, e.getMessage());
+            return null;
+        } catch (IOException e) {
+            // toRealPath also fails for a file that simply is not there, which is
+            // the ordinary "source moved since the index was written" case.
+            log.debug("Could not resolve {}: {}", relativeFile, e.getMessage());
             return null;
         }
     }

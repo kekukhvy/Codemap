@@ -84,6 +84,47 @@ class ClassSourceReaderTest {
         assertThat(source).isEmpty();
     }
 
+    /**
+     * Lexical normalisation is not enough: a repository can simply contain a
+     * source file that is a symlink to something private, and the file walk
+     * enumerates symlinked files. The reviewer then attaches a report carrying
+     * the secret to the pull request.
+     */
+    @Test
+    @DisplayName("refuses a symlink pointing outside the project root")
+    void refusesSymlinkEscape() throws IOException {
+        Path secret = projectRoot.getParent().resolve("outside-secret.txt");
+        Files.writeString(secret, "a-secret-the-report-must-not-embed\n");
+        Path link = projectRoot.resolve("Linked.java");
+        try {
+            Files.createSymbolicLink(link, secret);
+        } catch (UnsupportedOperationException | IOException e) {
+            return; // a filesystem without symlinks cannot exhibit the problem
+        }
+
+        String source = ClassSourceReader.read(projectRoot, "Linked.java", 1, 1);
+
+        assertThat(source).isEmpty();
+    }
+
+    @Test
+    @DisplayName("refuses a file reached through a symlinked directory")
+    void refusesSymlinkedDirectoryEscape() throws IOException {
+        Path outsideDir = projectRoot.getParent().resolve("outside-dir");
+        Files.createDirectories(outsideDir);
+        Files.writeString(outsideDir.resolve("Secret.java"), "class Secret {}\n");
+        Path link = projectRoot.resolve("linked-dir");
+        try {
+            Files.createSymbolicLink(link, outsideDir);
+        } catch (UnsupportedOperationException | IOException e) {
+            return;
+        }
+
+        String source = ClassSourceReader.read(projectRoot, "linked-dir/Secret.java", 1, 1);
+
+        assertThat(source).isEmpty();
+    }
+
     @Test
     @DisplayName("still reads a file in a subdirectory of the project root")
     void readsNestedFile() throws IOException {

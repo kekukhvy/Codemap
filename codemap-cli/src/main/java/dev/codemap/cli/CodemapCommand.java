@@ -2,8 +2,6 @@ package dev.codemap.cli;
 
 import dev.codemap.core.CodemapOptions;
 import dev.codemap.core.InvalidOptionsException;
-import dev.codemap.core.diff.GitCommandRunner;
-import dev.codemap.core.diff.PullRequestBase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -116,7 +114,7 @@ public final class CodemapCommand implements Callable<Integer> {
 
     /** Creates a command backed by the real pipeline runner. */
     public CodemapCommand() {
-        this(new CodemapRunner(), new PullRequestBase(new GitCommandRunner()));
+        this(new CodemapRunner(), new PullRequestBase());
     }
 
     /**
@@ -126,7 +124,7 @@ public final class CodemapCommand implements Callable<Integer> {
      * @param runner receives the validated options
      */
     CodemapCommand(CodemapRunner runner) {
-        this(runner, new PullRequestBase(new GitCommandRunner()));
+        this(runner, new PullRequestBase());
     }
 
     /**

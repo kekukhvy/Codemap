@@ -3,7 +3,6 @@ package dev.codemap.cli;
 import dev.codemap.core.CodemapOptions;
 import dev.codemap.core.ComparisonMode;
 import dev.codemap.core.diff.GitCommandResult;
-import dev.codemap.core.diff.PullRequestBase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;

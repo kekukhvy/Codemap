@@ -1,4 +1,6 @@
-package dev.codemap.core.diff;
+package dev.codemap.cli;
+
+import dev.codemap.core.diff.GitCommandResult;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
