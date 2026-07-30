@@ -60,6 +60,20 @@ class ReportRendererTest {
                     + "    // </script/><img src=x onerror=alert(3)>\n"
                     + "    save();\n}";
 
+    /**
+     * The class-level equivalent: a whole class body is a far larger untrusted
+     * payload than one method, and it reaches the page through
+     * {@code ClassView.source} rather than {@code IndexedMethod.source}.
+     */
+    private static final String CLASS_SOURCE_WITH_SCRIPT_TAG =
+            "public class TaskController {\n"
+                    + "    // a-class-body-marker\n"
+                    + "    // </script> should not break the page\n"
+                    + "    // </script foo><img src=x onerror=alert(4)>\n"
+                    + "    // </SCRIPT><img src=x onerror=alert(5)>\n"
+                    + "    // </script/><img src=x onerror=alert(6)>\n"
+                    + "}\n";
+
     private final ReportRenderer renderer = new ReportRenderer();
 
     @TempDir
@@ -148,6 +162,20 @@ class ReportRendererTest {
         }
 
         @Test
+        @DisplayName("no script end tag from embedded class source survives either")
+        void embeddedClassSourceCannotCloseTheScriptElement() throws IOException {
+            Files.writeString(projectRoot.resolve("TaskController.java"), CLASS_SOURCE_WITH_SCRIPT_TAG);
+
+            String html = render(fixtureIndex());
+
+            assertThat(html).contains("a-class-body-marker");
+            assertThat(html)
+                    .doesNotContainPattern("(?i)</script[\\s/]")
+                    .doesNotContainPattern("(?i)<img");
+            assertThat(countOccurrences(html, "</script>")).isEqualTo(EXPECTED_SCRIPT_ELEMENTS);
+        }
+
+        @Test
         @DisplayName("carries module dependencies for the module overview")
         void embedsModuleDependencies() throws IOException {
             String html = render(fixtureIndex());
@@ -201,6 +229,7 @@ class ReportRendererTest {
 
     private CodeIndex fixtureIndex() {
         return CodeIndex.builder()
+                .root(projectRoot.toString())
                 .modules(List.of(
                         new IndexedModule(MODULE_ID, "kairos-api", "kairos-api", List.of("src/main/java")),
                         new IndexedModule(OTHER_MODULE_ID, "common", "common", List.of("src/main/java"))))
