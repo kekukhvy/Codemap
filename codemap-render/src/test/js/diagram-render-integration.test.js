@@ -21,6 +21,7 @@ const METHOD_UPDATE = "com.example.TaskController#update()";
 const METHOD_VALIDATE = "com.example.TaskController#validate()";
 const METHOD_SAVE = "com.example.TaskRepository#save()";
 const METHOD_FIND = "com.example.TaskRepository#find()";
+const METHOD_ARCHIVE = "com.example.TaskController#archive()";
 
 function fixture() {
   return {
@@ -94,6 +95,8 @@ function run() {
   testExpandingRendersOneLinkPerCallWithNoSharedSegment(view);
 
   testAddedClassGetsGreenHeaderFillAndStatusGlyph();
+  testChangedClassGetsGreenBorderWithOnlyItsChangedRowGreenAndNoHeaderFill();
+  testAffectedClassGetsDashedAmberBorderAndTriangleGlyph();
   testLinksToDifferentClassesInTheSameColumnNeverShareASegment();
   testHoveringALinkHighlightsItAndBothEndpointRows();
 
@@ -200,6 +203,62 @@ function testAddedClassGetsGreenHeaderFillAndStatusGlyph() {
 
   const updateRow = box.children.find((node) => (node.getAttribute("class") || "").includes("member-row"));
   assert.ok((updateRow.getAttribute("class") || "").includes("status-added"), "the changed row itself is also marked");
+}
+
+/**
+ * Spec 007 §3/§4.3: a `CHANGED` class draws a green border but, unlike
+ * `ADDED`, gets no green header fill — and only the rows that themselves
+ * changed are coloured, not every row the box happens to show.
+ */
+function testChangedClassGetsGreenBorderWithOnlyItsChangedRowGreenAndNoHeaderFill() {
+  const data = fixture();
+  data.classes[0] = { ...data.classes[0], status: "CHANGED" };
+  data.methods[0] = { ...data.methods[0], status: "CHANGED" };
+  data.methods.push({
+    id: METHOD_ARCHIVE, classId: CONTROLLER_CLASS, name: "archive", signature: "archive()",
+    file: "TaskController.java", lineStart: 22, lineEnd: 24, javadoc: null, source: "void archive() { }",
+    constructor: false, visibility: "PUBLIC", status: "UNCHANGED"
+  });
+  const { view } = loadReportScriptWithJoinableD3(data);
+
+  view.openEntryPointPill("entry-1");
+
+  const box = classBoxes(view)[0];
+  assert.ok((box.getAttribute("class") || "").includes("status-changed"),
+      "a CHANGED class box carries the status-changed CSS class (spec 007 §3)");
+
+  const headerFill = box.children.find((node) => node.getAttribute("class") === "box-header-fill");
+  assert.ok(!headerFill, "a CHANGED box gets no green header fill — that is ADDED-only (spec 007 §3)");
+
+  const memberRows = box.children.filter((node) => (node.getAttribute("class") || "").includes("member-row"));
+  const changedRow = memberRows.find((node) => node.text().includes("update()"));
+  const unchangedRow = memberRows.find((node) => node.text().includes("archive()"));
+  assert.ok((changedRow.getAttribute("class") || "").includes("status-changed"),
+      "the changed method's own row is coloured");
+  assert.ok(!(unchangedRow.getAttribute("class") || "").includes("status-changed"),
+      "the unchanged sibling row inside a CHANGED class stays plain (spec 007 §3)");
+}
+
+/**
+ * Spec 007 §3: an `AFFECTED` class draws a dashed amber border, and its
+ * status glyph is the triangle (`▲`), visibly distinct from the filled
+ * circle (`●`) ADDED/CHANGED share — status is never colour-only.
+ */
+function testAffectedClassGetsDashedAmberBorderAndTriangleGlyph() {
+  const data = fixture();
+  data.classes[0] = { ...data.classes[0], status: "AFFECTED" };
+  const { view } = loadReportScriptWithJoinableD3(data);
+
+  view.openEntryPointPill("entry-1");
+
+  const box = classBoxes(view)[0];
+  assert.ok((box.getAttribute("class") || "").includes("status-affected"),
+      "an AFFECTED class box carries the status-affected CSS class, which the stylesheet dashes (spec 007 §3)");
+
+  const glyph = box.children.find((node) => (node.getAttribute("class") || "").startsWith("status-glyph "));
+  assert.ok(glyph, "the header carries a status glyph, so status is never colour-only (spec 007 §3)");
+  assert.ok((glyph.getAttribute("class") || "").includes("status-glyph-affected"),
+      "AFFECTED uses its own glyph CSS class, distinct from status-glyph-added/status-glyph-changed");
 }
 
 function testOpeningTheEntryPointRendersTheClassBoxWithTheHandlerRowUnderlined(view) {
