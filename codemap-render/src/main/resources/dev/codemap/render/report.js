@@ -656,6 +656,10 @@
   /** Grid cells the corridor search will consider before falling back. */
   const CORRIDOR_GRID_BUDGET = 6000;
   /** Cost of a corner, in pixels-equivalent: fewer turns read more clearly. */
+  /** Clear space a routed line prefers to keep from any box edge. */
+  const BOX_CLEARANCE = 6;
+  /** Cost of running within BOX_CLEARANCE of a box rather than giving it room. */
+  const GRAZE_PENALTY = 300;
   const TURN_PENALTY = 40;
   /** Cost of reusing a segment another link already claimed — steep, but not a ban. */
   const SHARED_SEGMENT_PENALTY = 4000;
@@ -663,6 +667,8 @@
   const RESERVATION_PITCH = LANE_SPACING;
   /** How far beyond a route's own extent a box still shapes its grid. */
   const ROUTE_NEIGHBOURHOOD_PAD = 160;
+  /** Attempts to push a box clear of its neighbours before giving up. */
+  const OVERLAP_RESOLUTION_ATTEMPTS = 12;
   const SELF_LINK_LOOP_WIDTH = 36;
 
   /**
@@ -1055,6 +1061,12 @@
       if (overlapsReserved(from, to, reserved)) {
         cost += SHARED_SEGMENT_PENALTY;
       }
+      // A line grazing a border reads as if drawn on it. Charged rather than
+      // forbidden: in a tight gap the only way through really is close to a
+      // box, and refusing it outright pushed paths back through boxes.
+      if (walls.some((wall) => segmentGrazesRect(from, to, wall.rect))) {
+        cost += GRAZE_PENALTY;
+      }
       steps.push({ xi: candidate.xi, yi: candidate.yi, cost, horizontal });
     }
     return steps;
@@ -1102,6 +1114,17 @@
     }
     const classes = (target.getAttribute("class") || "").split(" ");
     return classes.includes(BOX_RECT_CLASS) || classes.includes(BOX_HEADER_FILL_CLASS);
+  }
+
+  /** Whether a segment runs closer to a rectangle than {@link BOX_CLEARANCE} without entering it. */
+  function segmentGrazesRect(a, b, rect) {
+    const inflated = {
+      x: rect.x - BOX_CLEARANCE,
+      y: rect.y - BOX_CLEARANCE,
+      width: rect.width + BOX_CLEARANCE * 2,
+      height: rect.height + BOX_CLEARANCE * 2
+    };
+    return segmentCrossesRect(a, b, inflated);
   }
 
   /** Whether an axis-aligned segment penetrates a rectangle's interior. */
@@ -1643,7 +1666,44 @@
           ? { ...position, rect: { ...position.rect, x: position.rect.x + offset.x, y: position.rect.y + offset.y } }
           : position);
     }
-    return { ...layout, boxPositions: moved };
+    return { ...layout, boxPositions: separateOverlaps(moved, offsets) };
+  }
+
+  /**
+   * Nudges un-dragged boxes down until nothing overlaps.
+   *
+   * <p>A dragged box is where the reader put it, so it never yields; everything
+   * else gives way. Without this a drop on top of a neighbour left two boxes
+   * sharing the same space and the router — which treats boxes as walls — was
+   * asked for paths through solid ground, so links ran along the seam.
+   */
+  function separateOverlaps(positions, offsets) {
+    const entries = [...positions.entries()];
+    // Dragged boxes are resolved first and never moved, so they win any contest.
+    entries.sort(([leftId], [rightId]) =>
+        (offsets.has(rightId) ? 1 : 0) - (offsets.has(leftId) ? 1 : 0));
+
+    const settled = [];
+    const result = new Map();
+    for (const [classId, position] of entries) {
+      let rect = position.rect;
+      if (!offsets.has(classId)) {
+        for (let attempt = 0; attempt < OVERLAP_RESOLUTION_ATTEMPTS; attempt++) {
+          const clash = settled.find((other) => rectsOverlap(rect, other));
+          if (!clash) {
+            break;
+          }
+          rect = { ...rect, y: clash.y + clash.height + BOX_VERTICAL_GAP };
+        }
+      }
+      settled.push(rect);
+      result.set(classId, { ...position, rect });
+    }
+    return result;
+  }
+
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
   }
 
   /** The synthetic pill -> declaring-class link that seeds column 0 -> column 1 (spec 007 §4.1). */

@@ -67,6 +67,8 @@ function run() {
   testDragOffsetSurvivesRelayout();
   testDragDoesNotSwallowControlClicks();
   testACollapsedBoxCanBeReopened();
+  testDroppingOnANeighbourPushesItOutOfTheWay();
+  testRoutesKeepClearOfBoxBordersWhenThereIsRoom();
 
   console.log("box-arrangement.test.js: all assertions passed");
 }
@@ -187,6 +189,55 @@ function testACollapsedBoxCanBeReopened() {
 
   assert.strictEqual(view.lastLayout.boxPositions.get(DOMAIN).compartments.publicMethods.length, rowsWhenOpen,
       "clicking the fold control again must bring the rows back");
+}
+
+/**
+ * Dropping a box on a neighbour left the two sharing the same space, and the
+ * router — which treats boxes as walls — was then asked for a path through
+ * solid ground, so links ran along the seam.
+ */
+function testDroppingOnANeighbourPushesItOutOfTheWay() {
+  const internal = loadReportScript(EMPTY);
+  const layout = {
+    pillRect: { x: 0, y: 0, width: 10, height: 10 },
+    boxPositions: new Map([
+      ["dragged", { rect: { x: 100, y: 100, width: 220, height: 60 }, column: 1, compartments: {} }],
+      ["settled", { rect: { x: 100, y: 200, width: 220, height: 60 }, column: 1, compartments: {} }]
+    ])
+  };
+
+  // Drop "dragged" squarely on top of "settled".
+  const moved = internal.applyBoxOffsets(layout, new Map([["dragged", { x: 0, y: 100 }]]));
+
+  const dragged = moved.boxPositions.get("dragged").rect;
+  const settled = moved.boxPositions.get("settled").rect;
+
+  assert.strictEqual(dragged.y, 200, "the dragged box stays exactly where it was dropped");
+  const overlapping = dragged.x < settled.x + settled.width && dragged.x + dragged.width > settled.x
+      && dragged.y < settled.y + settled.height && dragged.y + dragged.height > settled.y;
+  assert.ok(!overlapping, "the box that was not dragged gives way instead of being sat on");
+}
+
+/** A line grazing a border reads as if drawn on it. */
+function testRoutesKeepClearOfBoxBordersWhenThereIsRoom() {
+  const internal = loadReportScript(EMPTY);
+  const link = {
+    lane: 0, selfLink: false,
+    from: { rect: { x: 0, y: 0, width: 200, height: 60 }, rowY: 30 },
+    to: { rect: { x: 600, y: 0, width: 200, height: 60 }, rowY: 30 }
+  };
+  const blocker = { rect: { x: 300, y: -50, width: 200, height: 200 } };
+
+  const points = internal.routeOrthogonalLink(link, [blocker], new Set());
+
+  for (const point of points) {
+    const outsideX = Math.max(blocker.rect.x - point.x, point.x - (blocker.rect.x + blocker.rect.width), 0);
+    const outsideY = Math.max(blocker.rect.y - point.y, point.y - (blocker.rect.y + blocker.rect.height), 0);
+    if (outsideX > 0 || outsideY > 0) {
+      assert.ok(Math.max(outsideX, outsideY) >= 6,
+          `a turn at (${point.x},${point.y}) hugs the blocker's border`);
+    }
+  }
 }
 
 run();
