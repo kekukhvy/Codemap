@@ -18,8 +18,29 @@ function emptyFixture() {
 function run() {
   testEveryLinkGetsADistinctLane();
   testLaneAssignmentIsDeterministic();
+  testLanesAreScopedPerGapNotGlobally();
 
   console.log("lane-allocation.test.js: all assertions passed");
+}
+
+function testLanesAreScopedPerGapNotGlobally() {
+  const internal = loadReportScript(emptyFixture());
+
+  // Two links share the A->X gap; one unrelated link crosses a different B->Y
+  // gap. The renderer groups by gap and allocates lanes within each group
+  // (spec 007 §6.4.1) — this is the function the live rendering path uses,
+  // not a parallel hand-rolled counter (DRY).
+  const links = [
+    { id: "link-1", source: "A", target: "X" },
+    { id: "link-2", source: "A", target: "X" },
+    { id: "link-3", source: "B", target: "Y" }
+  ];
+
+  const lanes = internal.assignLanesByGap(links, (link) => link.source + ">" + link.target);
+
+  assert.notStrictEqual(lanes.get("link-1"), lanes.get("link-2"),
+      "two links in the same gap must receive distinct lanes");
+  assert.strictEqual(lanes.get("link-3"), 0, "a lone link in its own gap starts at lane 0");
 }
 
 function testEveryLinkGetsADistinctLane() {

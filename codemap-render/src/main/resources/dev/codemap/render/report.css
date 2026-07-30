@@ -293,6 +293,14 @@ ul.nav-list a:hover {
   text-decoration: underline;
 }
 
+/* A hovered link highlights both endpoint rows too, so a long route can be
+   followed by eye (spec 007 §6.4.6) — same accent colour and weight as the
+   link itself getting `.hovered` below. */
+.class-box .member-row.hovered {
+  fill: var(--color-accent);
+  font-weight: 700;
+}
+
 .class-box .expander {
   fill: var(--color-accent);
   font-size: 11px;
@@ -382,8 +390,7 @@ ul.nav-list a:hover {
   stroke-width: 3px;
 }
 
-.class-link.hovered,
-.class-link-endpoint.hovered {
+.class-link.hovered {
   stroke: var(--color-accent);
   stroke-width: 3px;
 }

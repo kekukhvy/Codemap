@@ -24,7 +24,9 @@ const JS = fs.readFileSync(path.join(RESOURCE_DIR, "report.js"), "utf8");
 // the feature works.
 const STYLED_CLASSES = [
   "status-added", "status-changed", "status-affected",
-  "class-link-dashed", "class-link-cross-module", "underlined"
+  "class-link-dashed", "class-link-cross-module", "underlined",
+  "box-header-fill", "status-glyph", "status-glyph-added", "status-glyph-changed", "status-glyph-affected",
+  "box-stereotype", "hovered"
 ];
 for (const className of STYLED_CLASSES) {
   assert.ok(CSS.includes("." + className), "stylesheet is missing a rule for ." + className);

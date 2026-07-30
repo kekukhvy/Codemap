@@ -38,6 +38,10 @@
   const TRANSITION_MS = 250;
   const LINK_STYLE = { SOLID: "solid", DASHED: "dashed" };
 
+  /** Tags a member row with the method it renders, so a hovered link can find and highlight its endpoint rows (spec 007 §6.4.6). */
+  const MEMBER_ROW_METHOD_ID_ATTRIBUTE = "data-method-id";
+  const HOVERED_CSS_CLASS = "hovered";
+
   /** The strongest-first order a class box's own status resolves against its rows (spec 007 §3). */
   const STATUS_PRECEDENCE = [CHANGE_STATUS.ADDED, CHANGE_STATUS.CHANGED, CHANGE_STATUS.AFFECTED, CHANGE_STATUS.UNCHANGED];
 
@@ -141,6 +145,50 @@
     AFFECTED: "status-affected"
   };
 
+  /** The UML `«stereotype»` for a class box's header (spec 007 §2.2): the layer, lower-cased. */
+  function stereotypeLabel(layer) {
+    return layer ? "«" + layer.toLowerCase() + "»" : "";
+  }
+
+  const STATUS_GLYPH_CLASS = "status-glyph";
+  const BOX_HEADER_FILL_CLASS = "box-header-fill";
+
+  const STATUS_GLYPH_SYMBOL = {
+    ADDED: "●", // filled circle
+    CHANGED: "●", // filled circle — CHANGED reads the same as ADDED, distinguished by which rows are green
+    AFFECTED: "▲" // triangle, visibly distinct from the ADDED/CHANGED circle
+  };
+
+  const STATUS_GLYPH_CSS_CLASS = {
+    ADDED: "status-glyph-added",
+    CHANGED: "status-glyph-changed",
+    AFFECTED: "status-glyph-affected"
+  };
+
+  /**
+   * The header status glyph (spec 007 §3): carries a box's change status
+   * redundantly with its border colour/style, for readers who cannot rely on
+   * colour alone. {@code null} when the box is `UNCHANGED` — nothing is drawn.
+   *
+   * @return {@code {symbol, cssClass}}, or {@code null}
+   */
+  function statusGlyph(status) {
+    const symbol = STATUS_GLYPH_SYMBOL[status];
+    if (!symbol) {
+      return null;
+    }
+    return { symbol, cssClass: STATUS_GLYPH_CSS_CLASS[status] };
+  }
+
+/**
+   * The strongest status a class box itself carries (spec 007 §3): the
+   * strongest among its own status and every currently visible row's status.
+   * Shared by the box's CSS classes and its header (status glyph, fill).
+   */
+  function boxStrongestStatus(ownStatus, visibleRowStatuses) {
+    return strongestStatus([ownStatus, ...visibleRowStatuses]);
+  }
+
   /**
    * The CSS classes for a class box's `<g>` (spec 007 §3): `class-box` plus,
    * when the strongest status among the box itself and its visible rows is
@@ -148,7 +196,7 @@
    * the cascade cannot pick the wrong colour.
    */
   function boxCssClasses(ownStatus, visibleRowStatuses) {
-    const strongest = strongestStatus([ownStatus, ...visibleRowStatuses]);
+    const strongest = boxStrongestStatus(ownStatus, visibleRowStatuses);
     const classes = ["class-box"];
     if (STATUS_CSS_CLASS[strongest]) {
       classes.push(STATUS_CSS_CLASS[strongest]);
@@ -557,6 +605,17 @@
    * segment (spec 007 §6.4.3) — the lane grid guarantees a free corridor
    * exists between columns since boxes never occupy the inter-column gap.
    *
+   * <p>A link that spans more than one column gap can still have an obstacle
+   * sitting in a column *between* the source and target, straddling the
+   * source or target row's own y — the vertical-run clearance above does not
+   * protect the horizontal legs at row height in that case, since those legs
+   * sweep across exactly the x range the obstacle occupies. When either leg
+   * would cross such an obstacle, that leg is stepped: a short vertical hop
+   * right next to the box edge, offset by this link's own lane so several
+   * links leaving the very same row never collapse onto the same stub
+   * segment (AC11), carries it clear of the obstacle's row band before it
+   * turns onto the lane.
+   *
    * <p>A self-link ({@code link.selfLink}) departs and re-enters the same
    * box's right edge, looping out and back with a small distinct loop rather
    * than degenerating into a zero-length link.
@@ -568,55 +627,164 @@
    */
   function routeOrthogonalLink(link, obstacles) {
     if (link.selfLink) {
-      return routeSelfLink(link);
+      return routeSelfLink(link, obstacles);
     }
     const sourceExitX = link.from.rect.x + link.from.rect.width;
     const targetEntryX = link.to.rect.x;
     const sourceY = link.from.rowY;
     const targetY = link.to.rowY;
     const laneX = laneCorridorX(sourceExitX, targetEntryX, link.lane, sourceY, targetY, obstacles);
-    return [
+    const sourceStubX = sourceExitX + LANE_SPACING * (link.lane + 1);
+    const targetStubX = targetEntryX - LANE_SPACING * (link.lane + 1);
+    const sourceDetourY = rowLegDetourY(sourceStubX, sourceY, laneX, targetY, obstacles);
+    const targetDetourY = rowLegDetourY(targetStubX, targetY, laneX, sourceY, obstacles);
+    const points = [
       { x: sourceExitX, y: sourceY },
-      { x: laneX, y: sourceY },
-      { x: laneX, y: targetY },
+      { x: sourceStubX, y: sourceY },
+      { x: sourceStubX, y: sourceDetourY },
+      { x: laneX, y: sourceDetourY },
+      { x: laneX, y: targetDetourY },
+      { x: targetStubX, y: targetDetourY },
+      { x: targetStubX, y: targetY },
       { x: targetEntryX, y: targetY }
     ];
+    return dedupeConsecutivePoints(points);
   }
 
-  /** The lane's x position, nudged right of any obstacle the vertical run would otherwise cross. */
-  function laneCorridorX(sourceExitX, targetEntryX, lane, sourceY, targetY, obstacles) {
-    const baseX = Math.min(sourceExitX, targetEntryX) + LANE_SPACING * (lane + 1);
-    let candidateX = baseX;
-    for (const obstacle of obstacles) {
-      candidateX = clearObstacle(candidateX, obstacle.rect, sourceY, targetY);
+  /**
+   * The y at which a row leg's lane-offset stub (spec 007 §6.4.4) may safely
+   * turn onto the lane (spec 007 §6.4.3): `rowY` itself, unless some obstacle
+   * sitting in a column between the source and target straddles `rowY` and
+   * would block a horizontal sweep from the stub to `laneX` — a case the
+   * vertical-run clearance in {@link #laneCorridorX} does not protect
+   * against, since that only clears the lane's own x, not a row-height sweep
+   * that starts short of it. When blocked, the leg detours to the near edge
+   * of the blocking obstacle that still lies within the `[rowY, otherRowY]`
+   * band the lane's vertical run is already known clear across, so the
+   * detour never introduces a *new* uncleared x/y combination.
+   */
+  function rowLegDetourY(stubX, rowY, laneX, otherRowY, obstacles) {
+    const legMinX = Math.min(stubX, laneX);
+    const legMaxX = Math.max(stubX, laneX);
+    const blocking = obstacles.filter((obstacle) => obstacleBlocksRowLeg(obstacle, rowY, legMinX, legMaxX));
+    if (blocking.length === 0) {
+      return rowY;
     }
-    return candidateX;
+    const towardOther = otherRowY >= rowY;
+    const edges = blocking.map((obstacle) => (towardOther ? obstacle.rect.y + obstacle.rect.height : obstacle.rect.y));
+    return towardOther ? Math.max(...edges) : Math.min(...edges);
   }
 
-  /** Nudges a candidate vertical-run x to the right of an obstacle it would otherwise pass through. */
-  function clearObstacle(candidateX, obstacleRect, sourceY, targetY) {
+  /** Orthogonal routing never needs two consecutive identical points; collapses the (common) zero-length leg. */
+  function dedupeConsecutivePoints(points) {
+    return points.filter((point, index) => index === 0
+        || point.x !== points[index - 1].x || point.y !== points[index - 1].y);
+  }
+
+  /**
+   * Whether an obstacle's rectangle sits on the horizontal path a link's
+   * leading or trailing leg would sweep at a fixed row `y`, between the box
+   * edge and the lane (spec 007 §6.4.3) — the case the simple lane-clearance
+   * check on the vertical run alone misses: an obstacle in a column between
+   * the source and target, straddling the row's own y.
+   */
+  function obstacleBlocksRowLeg(obstacle, rowY, legMinX, legMaxX) {
+    const rect = obstacle.rect;
+    const rowIsInsideObstacle = rowY > rect.y && rowY < rect.y + rect.height;
+    const obstacleOverlapsLeg = rect.x + rect.width > legMinX && rect.x < legMaxX;
+    return rowIsInsideObstacle && obstacleOverlapsLeg;
+  }
+
+  /**
+   * The lane's x position, nudged right of any obstacle the vertical run
+   * would otherwise cross (spec 007 §6.4.3). The lane's own offset
+   * (`lane * LANE_SPACING`) is re-applied on top of whatever obstacle
+   * clearance was needed, rather than every cleared lane collapsing onto the
+   * same fixed "just past the obstacle" x — two links that both have to dodge
+   * the same box still end up on two distinct x's, so a shared corridor with
+   * several boxes to route around never merges two lanes into one (AC11).
+   */
+  function laneCorridorX(sourceExitX, targetEntryX, lane, sourceY, targetY, obstacles) {
+    const baseX = Math.min(sourceExitX, targetEntryX);
+    const laneOffset = LANE_SPACING * (lane + 1);
+    const clearanceFloor = obstacleClearanceFloor(baseX, sourceY, targetY, obstacles);
+    return Math.max(baseX + laneOffset, clearanceFloor + laneOffset);
+  }
+
+  /** The furthest right edge, among every obstacle the vertical run would otherwise cross, that lanes must clear. */
+  function obstacleClearanceFloor(baseX, sourceY, targetY, obstacles) {
     const minY = Math.min(sourceY, targetY);
     const maxY = Math.max(sourceY, targetY);
-    const verticalRunOverlapsObstacle = maxY > obstacleRect.y && minY < obstacleRect.y + obstacleRect.height;
-    const candidateInsideObstacleSpan = candidateX > obstacleRect.x && candidateX < obstacleRect.x + obstacleRect.width;
-    if (verticalRunOverlapsObstacle && candidateInsideObstacleSpan) {
-      return obstacleRect.x + obstacleRect.width + LANE_SPACING;
+    let floor = baseX;
+    for (const obstacle of obstacles) {
+      const rect = obstacle.rect;
+      const verticalRunOverlapsObstacle = maxY > rect.y && minY < rect.y + rect.height;
+      const obstacleIsToTheRight = rect.x + rect.width > baseX;
+      if (verticalRunOverlapsObstacle && obstacleIsToTheRight) {
+        floor = Math.max(floor, rect.x + rect.width);
+      }
     }
-    return candidateX;
+    return floor;
   }
 
-  /** A small loop leaving and re-entering the same box's right edge (spec 007 §6.4, self-links). */
-  function routeSelfLink(link) {
+  /**
+   * A small loop leaving and re-entering the same box's right edge (spec 007
+   * §6.4, self-links). A box with several self-links (a constructor calling
+   * several of its own builder methods, say) stacks their loops outward by
+   * lane, so the loop width is clamped against whatever obstacle it would
+   * otherwise reach into — a following column's box, most often — rather than
+   * growing unbounded with the lane index (spec 007 §6.4.3).
+   */
+  function routeSelfLink(link, obstacles) {
     const exitX = link.from.rect.x + link.from.rect.width;
-    const loopX = exitX + SELF_LINK_LOOP_WIDTH + link.lane * LANE_SPACING;
     const sourceY = link.from.rowY;
     const targetY = link.to.rowY;
+    const maxAllowedX = selfLinkCeilingX(exitX, sourceY, targetY, obstacles || []);
+    const loopX = selfLinkLoopX(exitX, link.lane, maxAllowedX);
     return [
       { x: exitX, y: sourceY },
       { x: loopX, y: sourceY },
       { x: loopX, y: targetY },
       { x: exitX, y: targetY }
     ];
+  }
+
+  /**
+   * The furthest x a self-link's loop may reach, given every obstacle whose
+   * row range it would otherwise cross (spec 007 §6.4.3) — a following
+   * column's box, most often. {@code Number.POSITIVE_INFINITY} when nothing
+   * constrains it.
+   */
+  function selfLinkCeilingX(exitX, sourceY, targetY, obstacles) {
+    let ceiling = Number.POSITIVE_INFINITY;
+    const minY = Math.min(sourceY, targetY);
+    const maxY = Math.max(sourceY, targetY);
+    for (const obstacle of obstacles) {
+      const rowRangeOverlapsObstacle = maxY > obstacle.rect.y && minY < obstacle.rect.y + obstacle.rect.height;
+      if (rowRangeOverlapsObstacle && obstacle.rect.x > exitX) {
+        ceiling = Math.min(ceiling, obstacle.rect.x - LANE_SPACING);
+      }
+    }
+    return ceiling;
+  }
+
+  /**
+   * A self-link's loop x for its lane, spread out from `exitX` by
+   * {@link #SELF_LINK_LOOP_WIDTH} plus a per-lane step (spec 007 §6.4.4) —
+   * distinct lanes must stay distinct even when a ceiling forces the step to
+   * shrink, so the step is compressed to fit the available room rather than
+   * every over-budget lane collapsing onto the same clamped x (which would
+   * violate "no two links share a segment", AC11). {@code lane * budget /
+   * (lane + 1)} is strictly increasing in `lane` for a fixed positive
+   * `budget`, so distinctness holds for any number of self-links sharing a box.
+   */
+  function selfLinkLoopX(exitX, lane, maxAllowedX) {
+    const desiredLoopX = exitX + SELF_LINK_LOOP_WIDTH + lane * LANE_SPACING;
+    if (desiredLoopX <= maxAllowedX) {
+      return desiredLoopX;
+    }
+    const budget = Math.max(maxAllowedX - exitX - SELF_LINK_LOOP_WIDTH, LANE_SPACING);
+    return exitX + SELF_LINK_LOOP_WIDTH + (budget * lane) / (lane + 1);
   }
 
   /** Renders a routed polyline (array of {@code {x, y}}) as an SVG path `d` attribute. */
@@ -645,6 +813,27 @@
     });
     const lanes = new Map();
     ordered.forEach((link, index) => lanes.set(link.id, index));
+    return lanes;
+  }
+
+  /**
+   * Groups links by the inter-column gap they cross and allocates lanes
+   * within each group independently (spec 007 §6.4.1) — two links crossing
+   * different gaps may legitimately share a lane index, since they never
+   * share a corridor; two links crossing the same gap never do (§6.4.4).
+   *
+   * @param links every link currently drawn, each carrying a stable {@code id}
+   * @param gapKeyOf maps a link to the key identifying the gap it crosses
+   * @return {@code Map<linkId, laneIndex>}
+   */
+  function assignLanesByGap(links, gapKeyOf) {
+    const byGap = groupBy(links, gapKeyOf);
+    const lanes = new Map();
+    for (const linksInGap of byGap.values()) {
+      for (const [linkId, lane] of allocateLanes(linksInGap)) {
+        lanes.set(linkId, lane);
+      }
+    }
     return lanes;
   }
 
@@ -976,7 +1165,6 @@
         return;
       }
       this.lastLayout = layoutDiagram(this.controller.diagram, this.index, this.openPillId);
-      this.laneAllocations = null;
       this.drawPill(this.lastLayout);
       this.drawBoxes(this.lastLayout);
       this.drawLinks();
@@ -1011,10 +1199,14 @@
     }
 
     classBoxCssClasses(d) {
-      const rowStatuses = [...d.compartments.constructors, ...d.compartments.publicMethods, ...d.compartments.revealedPrivateMethods]
-          .map((method) => method.status);
       const owningClass = this.index.classOf(d.classId);
-      return boxCssClasses(owningClass ? owningClass.status : null, rowStatuses);
+      return boxCssClasses(owningClass ? owningClass.status : null, this.visibleRowStatuses(d));
+    }
+
+    /** Every currently visible row's status, for the box's own strongest-status rollup (spec 007 §3). */
+    visibleRowStatuses(d) {
+      return [...d.compartments.constructors, ...d.compartments.publicMethods, ...d.compartments.revealedPrivateMethods]
+          .map((method) => method.status);
     }
 
     /** Rebuilds one box's inner SVG: header, expander, and each compartment's rows. */
@@ -1026,13 +1218,42 @@
       this.renderCompartmentRows(group, d);
     }
 
+    /**
+     * The box header (spec 007 §2.2): an optional fill for `ADDED` boxes, the
+     * `«stereotype»` line above the class name, the clickable name itself,
+     * the `(+)`/`(-)` expander, and a status glyph carrying the box's status
+     * redundantly with colour (spec 007 §3).
+     */
     renderBoxHeader(group, d) {
       const owningClass = this.index.classOf(d.classId);
-      const header = group.append("text").attr("class", "box-header").attr("x", 8).attr("y", 16)
+      const strongest = boxStrongestStatus(owningClass ? owningClass.status : null, this.visibleRowStatuses(d));
+      this.renderHeaderFill(group, d, strongest);
+      group.append("text").attr("class", "box-stereotype").attr("x", 8).attr("y", 10)
+          .text(stereotypeLabel(owningClass ? owningClass.layer : null));
+      const header = group.append("text").attr("class", "box-header").attr("x", 8).attr("y", 22)
           .text((owningClass ? owningClass.simpleName : d.classId));
       header.on("click", () => this.navigateToClass(d.classId));
+      this.renderStatusGlyph(group, d, strongest);
       group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", 16).text("(+)")
           .on("click", () => this.toggleClassHeader(d.classId));
+    }
+
+    /** The green header fill an `ADDED` box gets, in addition to its solid green border (spec 007 §3). */
+    renderHeaderFill(group, d, strongest) {
+      if (strongest !== CHANGE_STATUS.ADDED) {
+        return;
+      }
+      group.append("rect").attr("class", BOX_HEADER_FILL_CLASS).attr("width", d.rect.width).attr("height", HEADER_HEIGHT);
+    }
+
+    /** The header status glyph, the colour-independent signal for the box's status (spec 007 §3). */
+    renderStatusGlyph(group, d, strongest) {
+      const glyph = statusGlyph(strongest);
+      if (!glyph) {
+        return;
+      }
+      group.append("text").attr("class", STATUS_GLYPH_CLASS + " " + glyph.cssClass)
+          .attr("x", d.rect.width - 32).attr("y", 16).text(glyph.symbol);
     }
 
     renderCompartmentRows(group, d) {
@@ -1064,7 +1285,8 @@
       const underlined = this.underlinedMethodIds.has(method.id);
       const classes = rowCssClasses(method.status, underlined).concat(isPrivateCompartment ? ["member-row-private"] : []);
       const label = visibilityMarker(method.visibility) + " " + method.signature;
-      group.append("text").attr("class", classes.join(" ")).attr("x", 12).attr("y", y + 14).text(label)
+      group.append("text").attr("class", classes.join(" ")).attr(MEMBER_ROW_METHOD_ID_ATTRIBUTE, method.id)
+          .attr("x", 12).attr("y", y + 14).text(label)
           .on("click", () => this.navigateToMethod(method.id));
       group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", y + 14).text("(+)")
           .on("click", () => this.toggleMethodRow(method.id, d.classId, this.expanderPathFor(d.classId)));
@@ -1118,7 +1340,9 @@
     }
 
     drawLinks() {
-      const links = this.renderableLinks().map((link) => this.routedLink(link)).filter((link) => link !== null);
+      const routable = this.renderableLinks().map((link) => this.resolveEndpoints(link)).filter((link) => link !== null);
+      const lanes = assignLanesByGap(routable, (link) => link.gapKey);
+      const links = routable.map((link) => this.routedLink(link, lanes.get(link.id)));
       const selection = this.viewport.selectAll("path.class-link").data(links, (d) => d.id);
       selection.exit().remove();
       const entered = selection.enter().append("path");
@@ -1127,27 +1351,56 @@
           .attr("class", (d) => linkCssClasses(d).join(" "))
           .attr("d", (d) => polylinePath(d.points))
           .attr("marker-end", "url(#arrowhead)")
-          .on("mouseenter", (event, d) => this.setLinkHovered(d.id, true))
-          .on("mouseleave", (event, d) => this.setLinkHovered(d.id, false));
+          .on("mouseenter", (event, d) => this.setLinkHovered(d, true))
+          .on("mouseleave", (event, d) => this.setLinkHovered(d, false));
     }
 
-    /** Hovering a link highlights it and both endpoints (spec 007 §6.4.6). */
-    setLinkHovered(linkId, hovered) {
-      this.viewport.selectAll("path.class-link").filter((d) => d.id === linkId).classed("hovered", hovered);
+    /**
+     * Hovering a link highlights it and both endpoints, so a long route can
+     * be followed by eye (spec 007 §6.4.6): the path itself, and the
+     * source/target member rows it connects.
+     */
+    setLinkHovered(link, hovered) {
+      this.viewport.selectAll("path.class-link").filter((d) => d.id === link.id).classed(HOVERED_CSS_CLASS, hovered);
+      this.setRowHovered(link.sourceMethodId, hovered);
+      this.setRowHovered(link.targetMethodId, hovered);
     }
 
-    /** Resolves a method-level link into routable endpoints, or `null` if either row is not currently drawn. */
-    routedLink(link) {
+    /** Highlights (or un-highlights) one member row, identified by the method it renders, across every box. */
+    setRowHovered(methodId, hovered) {
+      this.viewport.selectAll("text.member-row")
+          .filter((d, i, nodes) => nodes[i].attr(MEMBER_ROW_METHOD_ID_ATTRIBUTE) === methodId)
+          .classed(HOVERED_CSS_CLASS, hovered);
+    }
+
+    /**
+     * Resolves a method-level link into its two row positions plus the
+     * inter-column gap key it crosses (spec 007 §6.4.1), or `null` if either
+     * row is not currently drawn. The gap key is the pair of box **column
+     * x's**, not the class pair: every link sharing that same visual corridor
+     * must draw from one shared lane sequence, or two links between different
+     * class pairs that happen to cross the very same gap could still be
+     * allocated the same lane index and collide (AC11) — `source`/`target`
+     * (class ids) are kept too, for {@link allocateLanes}'s own deterministic
+     * tie-break ordering within a gap.
+     */
+    resolveEndpoints(link) {
       const sourcePosition = this.methodRowPositions.get(link.sourceMethodId);
       const targetPosition = this.methodRowPositions.get(link.targetMethodId);
       if (!sourcePosition || !targetPosition) {
         return null;
       }
-      const obstacles = this.obstaclesBetween(sourcePosition, targetPosition);
+      const gapKey = sourcePosition.rect.x + ">" + targetPosition.rect.x;
+      return { ...link, source: sourcePosition.classId, target: targetPosition.classId, gapKey, sourcePosition, targetPosition };
+    }
+
+    /** Routes one resolved link at its allocated lane (spec 007 §6.4), avoiding every other currently-drawn box. */
+    routedLink(link, lane) {
+      const obstacles = this.obstaclesBetween(link.sourcePosition, link.targetPosition);
       const points = routeOrthogonalLink({
-        from: sourcePosition,
-        to: targetPosition,
-        lane: this.laneFor(link.id, sourcePosition, targetPosition),
+        from: link.sourcePosition,
+        to: link.targetPosition,
+        lane,
         selfLink: link.selfLink
       }, obstacles);
       return { ...link, points };
@@ -1162,18 +1415,6 @@
         }
       }
       return obstacles;
-    }
-
-    /** A stable lane index per link id, so parallel links never share a routed segment (spec 007 §6.4.4). */
-    laneFor(linkId, sourcePosition, targetPosition) {
-      const gapKey = sourcePosition.classId + ">" + targetPosition.classId;
-      this.laneAllocations = this.laneAllocations || new Map();
-      if (!this.laneAllocations.has(gapKey)) {
-        this.laneAllocations.set(gapKey, 0);
-      }
-      const lane = this.laneAllocations.get(gapKey);
-      this.laneAllocations.set(gapKey, lane + 1);
-      return lane;
     }
 
     renderSidePanel() {
@@ -1405,6 +1646,9 @@
     groupBy,
     strongestStatus,
     visibilityMarker,
+    stereotypeLabel,
+    statusGlyph,
+    boxStrongestStatus,
     buildCompartments,
     boxCssClasses,
     rowCssClasses,
@@ -1418,6 +1662,7 @@
     routeOrthogonalLink,
     polylinePath,
     allocateLanes,
+    assignLanesByGap,
     buildClassPanelData,
     buildMethodPanelData,
     filterEntryPoints,
