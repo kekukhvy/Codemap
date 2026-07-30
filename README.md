@@ -50,8 +50,9 @@ Codemap roots the map in the places the outside world can reach:
   [POST /api/v1/tasks]  ← entry point pill
          ↓
     ┌─ TaskHandler ─(+)─┐  ← class box; (+) expands to show collaborators
-    │ + create()        │  ← entry method (underlined)
-    │ - validate()      │
+    │ + create()    (+) │  ← entry method (underlined)
+    ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+    │ - validate()      │  ← private: appeared because create() calls it
     └───────────────────┘
          ↓ calls
     ┌─ CreateTaskUseCase ─(+)─┐
@@ -67,8 +68,8 @@ Codemap roots the map in the places the outside world can reach:
 
 Everything under an entry point is reachable at runtime. That makes the map a
 map of behaviour, and it makes dead code visible by absence. Each class box
-shows its public methods and their collaborators; expand any method to walk
-deeper into the call graph.
+lists its public API; nothing else is drawn until you ask for it, so the canvas
+grows one deliberate step at a time rather than dumping the whole call graph.
 
 Each build module is its own root, because that is how such systems are
 deployed — separate processes, separate containers. Where modules genuinely
@@ -245,9 +246,10 @@ Each method row is prefixed with a **UML visibility marker**:
 - **`~`** — package-private
 - **`-`** — private
 
-The box header shows the class name and its architectural layer (its `@Layer` annotation,
-if present). A **`(+)` expander** on the header reveals what classes this class collaborates
-with — every class it calls at least one method on.
+The box header shows the class name and its architectural layer, inferred from the
+package and class name (`…/controller/`, `…Repository`, and so on). A **`(+)` expander**
+on the header reveals what classes this class collaborates with — every class it calls
+at least one method on.
 
 ### Expanding calls
 
@@ -265,14 +267,16 @@ visibility lets you follow which collaborators matter most.
 
 ### Link routing
 
-Links between boxes are **orthogonal polylines** (horizontal and vertical segments only),
-routed in **lanes** so they do not cross boxes or overlap each other. The spacing
-automatically adjusts as you expand more boxes, keeping the layout stable and readable.
-Hover a link to highlight it and both endpoint rows, making long routes easy to follow.
+Links between boxes are **orthogonal polylines** (horizontal and vertical segments only).
+Each link gets its own **lane**, so no line crosses a class rectangle and no two lines
+share a segment — where several relationships run between the same pair of columns you
+can still tell which goes where. Hover a link to highlight it and both endpoint rows,
+making long routes easy to follow.
 
 ### Class uniqueness
 
-A class appears **exactly once** on the canvas, keyed by its name. If two different call
+A class appears **exactly once** on the canvas, keyed by its fully-qualified name — so
+two same-named classes in different packages stay distinct. If two different call
 paths both reach the same class, they share the same box — you see it is a shared
 collaborator, not two separate instances. Collapsing one caller does not remove a box
 that another expanded path still reaches.
@@ -291,8 +295,9 @@ Click a **method row name** to open the side panel showing:
 - **Called by** — every class that calls this method (class names, not individual call sites)
 - **Method source** — the full method body
 
-Both panels are navigable — click a class or method name to jump to it elsewhere on the
-canvas or in the index.
+The class names in those lists are clickable: following one swaps the panel to that
+class, so you can read your way along a call chain. This never moves or redraws the
+canvas — the diagram stays exactly as you arranged it.
 
 ### Change highlighting
 
@@ -305,19 +310,21 @@ Change status is layered on top of the structure:
 | **Dashed amber** | `AFFECTED` | Class untouched, but a method it calls was changed |
 | **None** | `UNCHANGED` | Untouched |
 
-Status is shown by border colour and style, and optionally a glyph in the header, so it
-reads correctly for colour-blind readers. `REMOVED` methods are listed in the side panel
-only, since there is no class box to draw them on.
+Colour is never the only signal: the border style (solid, dashed, plain) and a glyph in
+the box header carry the same information, so the map reads correctly in greyscale and
+for colour-blind readers. `REMOVED` methods are listed in the side panel only, since
+there is no declaration left to draw a row for.
 
 ### Controls
 
-- **Focus on changes** — collapse everything except paths to changed nodes. Useful
-  when reviewing large diffs.
-- **Search** — filter the diagram by class or method name.
-- **Layer filter** — show or hide architectural layers. Quickly hide framework
-  wiring to focus on domain logic.
-- **Module filter** — narrow the diagram to a single build module.
+- **Entry-point list** — pick which entry point to open on the canvas.
+- **Search** — filter the entry-point list by class or method name.
+- **Layer filter** — restrict the list to entry points declared in one layer.
+- **Module filter** — restrict the list to one build module.
 - **Light/dark theme toggle** — choose your preferred reading mode.
+
+All three narrow the entry-point list you choose from, not the boxes already on the
+canvas — once a diagram is open, only expanding and collapsing changes what it shows.
 
 ---
 

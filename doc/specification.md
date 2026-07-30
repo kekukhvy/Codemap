@@ -92,8 +92,10 @@ other expanded paths still reach it. This keeps boxes readable while allowing th
 reader to walk implementations downwards on demand.
 
 **Layered column layout:** Boxes are positioned in columns by call depth from the
-entry point (depth 0 is the entry point's declaring class, depth 1 is its
-callees, etc.). Within a column, boxes are ordered to minimise link crossings.
+entry point: the pill occupies column 0, its declaring class column 1, that
+class's callees column 2, and so on. A class reached at two different depths sits
+in the shallowest column it was reached at. Within a column, boxes are ordered to
+minimise link crossings.
 An expander always positions new boxes in free space; collapsing does not move
 boxes already on the canvas. Links are drawn as orthogonal polylines with
 deterministic routing that avoids crossing box rectangles and does not share
