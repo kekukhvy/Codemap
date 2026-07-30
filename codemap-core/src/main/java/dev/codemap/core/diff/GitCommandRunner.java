@@ -27,8 +27,8 @@ public final class GitCommandRunner {
     private static final String GIT_BINARY = "git";
     private static final String GIT_NOT_FOUND = "git executable not found on PATH";
     private static final long TIMEOUT_SECONDS = 30;
-    private static final String TIMED_OUT = "git command timed out after " + TIMEOUT_SECONDS + "s";
-    private static final String INTERRUPTED = "git command was interrupted";
+    private static final String TIMED_OUT = "command timed out after " + TIMEOUT_SECONDS + "s";
+    private static final String INTERRUPTED = "command was interrupted";
 
     /**
      * Runs one git command in the given working directory.
@@ -70,7 +70,7 @@ public final class GitCommandRunner {
         }
 
         boolean succeeded = process.exitValue() == 0;
-        log.debug("git {} -> exit {}", command, process.exitValue());
+        log.debug("{} -> exit {}", command, process.exitValue());
         return new GitCommandResult(succeeded, stdout.join().strip(), stderr.join().strip());
     }
 

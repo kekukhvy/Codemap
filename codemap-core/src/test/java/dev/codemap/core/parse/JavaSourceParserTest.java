@@ -4,6 +4,7 @@ import dev.codemap.core.model.IndexedClass;
 import dev.codemap.core.model.IndexedMethod;
 import dev.codemap.core.model.Layer;
 import dev.codemap.core.model.TypeKind;
+import dev.codemap.core.model.Visibility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -132,6 +133,98 @@ class JavaSourceParserTest {
             IndexedMethod build = methodNamed("build");
 
             assertThat(build.classId()).isEqualTo(SAMPLE_FQN + ".Builder");
+        }
+    }
+
+    @Nested
+    @DisplayName("visibility")
+    class MethodVisibility {
+
+        @Test
+        @DisplayName("reads public, protected, private, and package-private methods")
+        void readsExplicitAndImplicitVisibility() throws IOException {
+            ParsedFile parsedFile = parse("Access.java", """
+                    package com.example;
+
+                    public class Access {
+                        public void doPublic() { }
+                        protected void doProtected() { }
+                        private void doPrivate() { }
+                        void doPackage() { }
+                    }
+                    """);
+
+            assertThat(methodNamed(parsedFile, "doPublic").visibility()).isEqualTo(Visibility.PUBLIC);
+            assertThat(methodNamed(parsedFile, "doProtected").visibility()).isEqualTo(Visibility.PROTECTED);
+            assertThat(methodNamed(parsedFile, "doPrivate").visibility()).isEqualTo(Visibility.PRIVATE);
+            assertThat(methodNamed(parsedFile, "doPackage").visibility()).isEqualTo(Visibility.PACKAGE);
+        }
+
+        @Test
+        @DisplayName("reads a constructor's visibility")
+        void readsConstructorVisibility() throws IOException {
+            ParsedFile parsedFile = parse("Guarded.java", """
+                    package com.example;
+
+                    public class Guarded {
+                        private Guarded() { }
+                    }
+                    """);
+
+            IndexedMethod constructor = parsedFile.methods().stream()
+                    .filter(IndexedMethod::constructor)
+                    .findFirst()
+                    .orElseThrow();
+
+            assertThat(constructor.visibility()).isEqualTo(Visibility.PRIVATE);
+        }
+
+        @Test
+        @DisplayName("treats an interface method with no modifier as implicitly public")
+        void interfaceMethodIsImplicitlyPublic() throws IOException {
+            ParsedFile parsedFile = parse("Visitor.java", """
+                    package com.example;
+
+                    public interface Visitor {
+                        void visit();
+                    }
+                    """);
+
+            assertThat(methodNamed(parsedFile, "visit").visibility()).isEqualTo(Visibility.PUBLIC);
+        }
+
+        @Test
+        @DisplayName("reads a private method declared on a nested class")
+        void readsNestedClassPrivateMethod() throws IOException {
+            ParsedFile parsedFile = parse("Outer.java", """
+                    package com.example;
+
+                    public class Outer {
+                        private static final class Inner {
+                            private void helper() { }
+                        }
+                    }
+                    """);
+
+            assertThat(methodNamed(parsedFile, "helper").visibility()).isEqualTo(Visibility.PRIVATE);
+        }
+
+        @Test
+        @DisplayName("treats a record's canonical constructor as implicitly public")
+        void canonicalRecordConstructorIsImplicitlyPublic() throws IOException {
+            ParsedFile parsedFile = parse("Pagination.java", """
+                    package com.example;
+
+                    public record Pagination(int limit, int offset) {
+                    }
+                    """);
+
+            IndexedMethod canonical = parsedFile.methods().stream()
+                    .filter(IndexedMethod::constructor)
+                    .findFirst()
+                    .orElseThrow();
+
+            assertThat(canonical.visibility()).isEqualTo(Visibility.PUBLIC);
         }
     }
 
@@ -287,7 +380,11 @@ class JavaSourceParserTest {
     }
 
     private IndexedMethod methodNamed(String name) {
-        return find(parsed.methods().stream().filter(method -> method.name().equals(name)).findFirst(), name);
+        return methodNamed(parsed, name);
+    }
+
+    private IndexedMethod methodNamed(ParsedFile file, String name) {
+        return find(file.methods().stream().filter(method -> method.name().equals(name)).findFirst(), name);
     }
 
     private <T> T find(Optional<T> candidate, String what) {

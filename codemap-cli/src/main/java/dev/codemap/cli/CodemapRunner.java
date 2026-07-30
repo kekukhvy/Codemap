@@ -8,6 +8,7 @@ import dev.codemap.core.diff.GitCommandRunner;
 import dev.codemap.core.index.IndexStore;
 import dev.codemap.core.index.ProjectIndexer;
 import dev.codemap.core.model.CodeIndex;
+import dev.codemap.render.ReportRenderer;
 import java.util.stream.Stream;
 import java.util.stream.Collectors;
 import java.util.Map;
@@ -20,9 +21,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Drives one analysis run from validated options.
  *
- * <p>Runs the indexing stage, then the diff stage on top of it, and persists the
- * result. Rendering is added behind this same call once it is built, so the
- * entry point does not reshape each time.
+ * <p>Runs the indexing stage, then the diff stage on top of it, persists the
+ * index, and renders the self-contained report from the result.
  */
 public class CodemapRunner {
 
@@ -34,23 +34,32 @@ public class CodemapRunner {
     private static final String SUMMARY_SEPARATOR = ", ";
     private static final String REMOVED_LABEL = "removed";
 
-    private static final String RENDER_PENDING =
-            "Rendering is not implemented yet — the index was written, but there is no report to open.";
     private static final String DIFF_UNRESOLVED =
             "Change status was not computed: {} The map will show no git overlay.";
 
     private final ProjectIndexer indexer;
     private final IndexStore indexStore;
     private final GitChangeAnalyzer changeAnalyzer;
+    private final ReportRenderer reportRenderer;
 
     public CodemapRunner() {
-        this(new ProjectIndexer(), new IndexStore(), new GitChangeAnalyzer(new GitChangeSource(new GitCommandRunner())));
+        this(new ProjectIndexer(), new IndexStore(),
+                new GitChangeAnalyzer(new GitChangeSource(new GitCommandRunner())), new ReportRenderer());
     }
 
     CodemapRunner(ProjectIndexer indexer, IndexStore indexStore, GitChangeAnalyzer changeAnalyzer) {
+        this(indexer, indexStore, changeAnalyzer, new ReportRenderer());
+    }
+
+    CodemapRunner(
+            ProjectIndexer indexer,
+            IndexStore indexStore,
+            GitChangeAnalyzer changeAnalyzer,
+            ReportRenderer reportRenderer) {
         this.indexer = indexer;
         this.indexStore = indexStore;
         this.changeAnalyzer = changeAnalyzer;
+        this.reportRenderer = reportRenderer;
     }
 
     /**
@@ -67,8 +76,9 @@ public class CodemapRunner {
         CodeIndex index = indexer.index(options.root());
         index = analyzeChanges(options, index);
         indexStore.write(index, options.indexPath());
+        reportRenderer.render(options, index);
+        log.info("Report        : {}", options.output());
 
-        log.warn(RENDER_PENDING);
         return ExitCode.SUCCESS;
     }
 

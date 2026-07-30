@@ -119,7 +119,10 @@ public final class GitChangeSource {
      * uncommitted changes to files outside the branch too.
      */
     private Optional<String> findMergeBase(Path repoRoot, String base) {
-        GitCommandResult result = gitCommandRunner.run(repoRoot, "merge-base", base, "HEAD");
+        // "--" separates options from revisions: the base can come from `gh`
+        // (a branch name chosen by whoever opened the pull request), and git
+        // would otherwise read a leading-dash name as an option.
+        GitCommandResult result = gitCommandRunner.run(repoRoot, "merge-base", "--", base, "HEAD");
         return result.succeeded() ? Optional.of(result.stdout()) : Optional.empty();
     }
 

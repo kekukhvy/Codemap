@@ -22,6 +22,10 @@ import java.util.Objects;
  * @param javadoc first sentence of the Javadoc, or {@code null} when absent
  * @param source the method's source text, as sliced from the file
  * @param constructor whether this is a constructor rather than a method
+ * @param visibility Java access level, read from the declaration's modifiers
+ *        (spec 007 §5.1); defaults to {@link Visibility#PACKAGE} when a
+ *        caller does not supply one, never {@link Visibility#PUBLIC} — an
+ *        unknown visibility must not be assumed to be the most permissive one
  * @param status change status from the diff stage (spec §5), or {@code null}
  *        when no diff was computed for this run — parsing never sets this
  */
@@ -36,6 +40,7 @@ public record IndexedMethod(
         String javadoc,
         String source,
         boolean constructor,
+        Visibility visibility,
         ChangeStatus status) {
 
     public IndexedMethod {
@@ -44,11 +49,15 @@ public record IndexedMethod(
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(signature, "signature");
         Objects.requireNonNull(file, "file");
+        if (visibility == null) {
+            visibility = Visibility.PACKAGE;
+        }
     }
 
     /**
-     * Convenience constructor for callers that do not yet know a status —
-     * parsing, and every existing test written before status existed.
+     * Convenience constructor for callers that do not yet know a status or a
+     * visibility — parsing sites that predate visibility, and every existing
+     * test written before either field existed.
      */
     public IndexedMethod(
             String id,
@@ -61,7 +70,8 @@ public record IndexedMethod(
             String javadoc,
             String source,
             boolean constructor) {
-        this(id, classId, name, signature, file, lineStart, lineEnd, javadoc, source, constructor, null);
+        this(id, classId, name, signature, file, lineStart, lineEnd, javadoc, source, constructor,
+                Visibility.PACKAGE, null);
     }
 
     /** Number of lines the declaration spans, including signature and braces. */
@@ -72,6 +82,8 @@ public record IndexedMethod(
 
     /** Returns a copy carrying the given status, computed by the diff stage. */
     public IndexedMethod withStatus(ChangeStatus value) {
-        return new IndexedMethod(id, classId, name, signature, file, lineStart, lineEnd, javadoc, source, constructor, value);
+        return new IndexedMethod(
+                id, classId, name, signature, file, lineStart, lineEnd, javadoc, source, constructor,
+                visibility, value);
     }
 }

@@ -20,3 +20,6 @@ codemap/report.html
 
 # OS
 .DS_Store
+
+# Built artifacts staged for distribution — rebuild with ./gradlew build
+dist/

@@ -58,6 +58,24 @@ class CodemapRunnerTest {
                     .doesNotContainNull();
             assertThat(index.methods()).anySatisfy(m -> assertThat(m.status()).isEqualTo(ChangeStatus.CHANGED));
         }
+
+        @Test
+        @DisplayName("also writes a self-contained report.html alongside the index")
+        void writesReport() throws IOException, InterruptedException {
+            initRepo();
+            writeClass("Service", "class Service { void touched() { } }");
+            commitAll("init on main");
+
+            CodemapOptions options = CodemapOptions.builder().root(projectRoot).base("main").build();
+            int exitCode = runner.run(options);
+
+            assertThat(exitCode).isEqualTo(ExitCode.SUCCESS);
+            Path report = options.output();
+            assertThat(report).exists();
+            String html = Files.readString(report);
+            assertThat(html).contains("<html");
+            assertThat(html).contains("Service");
+        }
     }
 
     @Nested
