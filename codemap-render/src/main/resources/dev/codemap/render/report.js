@@ -162,6 +162,7 @@
   const COLLAPSE_GLYPH_OPEN = "(−)";
   /** Shown when the box is collapsed — clicking it brings the rows back. */
   const COLLAPSE_GLYPH_CLOSED = "(…)";
+  const BOX_RECT_CLASS = "box-rect";
   const BOX_HEADER_FILL_CLASS = "box-header-fill";
 
   const STATUS_GLYPH_SYMBOL = {
@@ -1089,6 +1090,20 @@
     return parts;
   }
 
+  /**
+   * Whether a mousedown target should begin a box drag.
+   *
+   * <p>Only the box outline itself — everything interactive inside it (the class
+   * name, the expander, the fold control, the member rows) keeps its click.
+   */
+  function isDragHandle(target) {
+    if (!target || typeof target.getAttribute !== "function") {
+      return true;
+    }
+    const classes = (target.getAttribute("class") || "").split(" ");
+    return classes.includes(BOX_RECT_CLASS) || classes.includes(BOX_HEADER_FILL_CLASS);
+  }
+
   /** Whether an axis-aligned segment penetrates a rectangle's interior. */
   function segmentCrossesRect(a, b, rect) {
     const pad = 0.5;
@@ -1915,6 +1930,11 @@
       }
       const view = this;
       selection.call(d3.drag()
+          // Clicks on the header controls and the member rows must still be
+          // clicks: a drag behaviour bound to the whole group swallows their
+          // mousedown, which made the fold control impossible to press a second
+          // time. Only empty space and the box outline start a drag.
+          .filter((event) => isDragHandle(event.target))
           .on("start", function (event, d) {
             view.dragOrigin = { x: event.x, y: event.y, offset: view.boxOffsets.get(d.classId) || { x: 0, y: 0 } };
           })
@@ -1948,7 +1968,7 @@
     renderBoxContent(groupNode, d) {
       const group = d3.select(groupNode);
       group.selectAll("*").remove();
-      group.append("rect").attr("class", "box-rect").attr("width", d.rect.width).attr("height", d.rect.height);
+      group.append("rect").attr("class", BOX_RECT_CLASS).attr("width", d.rect.width).attr("height", d.rect.height);
       this.renderBoxHeader(group, d);
       this.renderCompartmentRows(group, d);
     }
@@ -2549,6 +2569,7 @@
     polylinePath,
     allocateLanes,
     applyBoxOffsets,
+    isDragHandle,
     mergeLinksIntoCollapsedBoxes,
     reserveTraversedSegments,
     searchCorridorPath,

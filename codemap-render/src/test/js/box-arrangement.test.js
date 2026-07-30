@@ -65,6 +65,8 @@ function run() {
   testCollapsedBoxIsWideEnoughForItsName();
   testDraggingMovesOnlyThatBox();
   testDragOffsetSurvivesRelayout();
+  testDragDoesNotSwallowControlClicks();
+  testACollapsedBoxCanBeReopened();
 
   console.log("box-arrangement.test.js: all assertions passed");
 }
@@ -152,6 +154,39 @@ function testDragOffsetSurvivesRelayout() {
 
   assert.strictEqual(afterFirst, before + 120, "the offset applies on top of the computed layout");
   assert.strictEqual(afterExpand, afterFirst, "a later expansion must not discard it");
+}
+
+/**
+ * A drag behaviour bound to the whole box group swallows the mousedown of
+ * everything inside it, which left a folded box impossible to re-open.
+ */
+function testDragDoesNotSwallowControlClicks() {
+  const internal = loadReportScript(EMPTY);
+  const target = (cssClass) => ({ getAttribute: (name) => (name === "class" ? cssClass : null) });
+
+  assert.ok(internal.isDragHandle(target("box-rect")), "the outline is the grab handle");
+  assert.ok(internal.isDragHandle(target("box-header-fill")), "so is the header fill behind it");
+
+  for (const control of ["collapse-toggle", "expander", "box-header", "member-row underlined"]) {
+    assert.ok(!internal.isDragHandle(target(control)),
+        `${control} must keep its click rather than start a drag`);
+  }
+}
+
+/** The whole point of folding: you can unfold it again. */
+function testACollapsedBoxCanBeReopened() {
+  const view = openedView();
+  const rowsWhenOpen = view.lastLayout.boxPositions.get(DOMAIN).compartments.publicMethods.length;
+  assert.ok(rowsWhenOpen > 0, "precondition: the domain box has rows to begin with");
+
+  view.toggleBoxCollapsed(DOMAIN);
+  assert.strictEqual(view.lastLayout.boxPositions.get(DOMAIN).compartments.publicMethods.length, 0,
+      "folded");
+
+  view.toggleBoxCollapsed(DOMAIN);
+
+  assert.strictEqual(view.lastLayout.boxPositions.get(DOMAIN).compartments.publicMethods.length, rowsWhenOpen,
+      "clicking the fold control again must bring the rows back");
 }
 
 run();

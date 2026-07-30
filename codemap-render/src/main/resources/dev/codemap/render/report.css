@@ -323,10 +323,18 @@ ul.nav-list a:hover {
 }
 
 /* The box is draggable (spec 007 §6.3): the automatic layout is a starting
-   point, not a verdict. The header is the grab handle — rows keep their own
-   pointer cursor so clicking a method still reads as a click. */
+   point, not a verdict. Only the outline itself is the grab handle — the name,
+   the controls and the rows all keep their own click, so `move` must not be
+   advertised over them. */
 .class-box .box-rect {
   cursor: move;
+}
+
+.class-box .box-header,
+.class-box .member-row,
+.class-box .expander,
+.class-box .collapse-toggle {
+  cursor: pointer;
 }
 
 /* Change-status outlines (spec 007 §3). Colour is never the only signal: the
