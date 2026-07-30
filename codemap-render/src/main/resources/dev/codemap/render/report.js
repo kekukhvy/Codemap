@@ -503,7 +503,14 @@
     }
 
     crossClassCall(targetMethod, path, crossModule) {
-      this.diagram.ensureBox(targetMethod.classId, path);
+      const box = this.diagram.ensureBox(targetMethod.classId, path);
+      // A package-private or protected target is not in the box's public
+      // compartment, so without revealing it the box would be drawn with no row
+      // to attach to and the link would be dropped silently — 99 links on
+      // Kairos, mostly calls into package-private application services.
+      if (!isPublicApi(targetMethod)) {
+        this.diagram.revealPrivateRow(box, targetMethod.id, path);
+      }
       return {
         targetClassId: targetMethod.classId,
         targetMethodId: targetMethod.id,
@@ -1522,6 +1529,7 @@
     renderableLinks() {
       const links = [];
       const seenIds = new Set();
+      this.addPillLink(links, seenIds);
       for (const methodId of this.expandedMethodRows.keys()) {
         const method = this.index.method(methodId);
         if (!method) {
@@ -1529,7 +1537,62 @@
         }
         this.addMethodRowLinks(method, links, seenIds);
       }
+      // A header expander reveals collaborator boxes, so it must draw the links
+      // that justify them — otherwise the reader gets rectangles with nothing
+      // joining them and no way to tell why they appeared.
+      for (const classId of this.expandedClassHeaders) {
+        this.addClassHeaderLinks(classId, links, seenIds);
+      }
       return links;
+    }
+
+    /** The pill -> entry-method link (spec 007 §4.1), which no expander owns. */
+    addPillLink(links, seenIds) {
+      if (!this.openPillId || !this.entryUnderlinedMethodId) {
+        return;
+      }
+      const linkId = this.openPillId + "->" + this.entryUnderlinedMethodId;
+      if (seenIds.has(linkId)) {
+        return;
+      }
+      seenIds.add(linkId);
+      links.push({
+        id: linkId,
+        fromPill: true,
+        sourcePillId: this.openPillId,
+        targetMethodId: this.entryUnderlinedMethodId,
+        style: LINK_STYLE.SOLID,
+        crossModule: false,
+        selfLink: false
+      });
+    }
+
+    /** One link per call from any method of `classId` into another drawn class. */
+    addClassHeaderLinks(classId, links, seenIds) {
+      for (const method of this.index.methodsOfClass(classId)) {
+        for (const edge of this.index.outgoing(method.id)) {
+          if (!this.index.isDrawableCallTarget(edge)) {
+            continue;
+          }
+          const target = this.index.method(edge.to);
+          if (target.classId === classId || !isPublicApi(target)) {
+            continue;
+          }
+          const linkId = method.id + "->" + target.id;
+          if (seenIds.has(linkId)) {
+            continue;
+          }
+          seenIds.add(linkId);
+          links.push({
+            id: linkId,
+            sourceMethodId: method.id,
+            targetMethodId: target.id,
+            style: LINK_STYLE.SOLID,
+            crossModule: edge.kind === EDGE_KIND.CROSS_MODULE,
+            selfLink: false
+          });
+        }
+      }
     }
 
     addMethodRowLinks(method, links, seenIds) {
@@ -1602,9 +1665,14 @@
      * tie-break ordering within a gap.
      */
     resolveEndpoints(link) {
-      const sourcePosition = this.methodRowPositions.get(link.sourceMethodId);
       const targetPosition = this.methodRowPositions.get(link.targetMethodId);
-      if (!sourcePosition || !targetPosition) {
+      if (!targetPosition) {
+        return null;
+      }
+      const sourcePosition = link.fromPill
+          ? this.pillRowPosition()
+          : this.methodRowPositions.get(link.sourceMethodId);
+      if (!sourcePosition) {
         return null;
       }
       // Keyed by the corridor the link actually occupies — the source's right
@@ -1614,6 +1682,15 @@
       // started at 0, so they collided (AC11).
       const gapKey = String(sourcePosition.rect.x + sourcePosition.rect.width);
       return { ...link, source: sourcePosition.classId, target: targetPosition.classId, gapKey, sourcePosition, targetPosition };
+    }
+
+    /** The pill as a link source: its rect, with the row y at the pill's middle. */
+    pillRowPosition() {
+      if (!this.lastLayout) {
+        return null;
+      }
+      const rect = this.lastLayout.pillRect;
+      return { classId: this.openPillId, rect, rowY: rect.y + rect.height / 2 };
     }
 
     /** Routes one resolved link at its allocated lane (spec 007 §6.4), avoiding every other currently-drawn box. */

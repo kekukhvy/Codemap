@@ -99,8 +99,51 @@ function run() {
   testAffectedClassGetsDashedAmberBorderAndTriangleGlyph();
   testLinksToDifferentClassesInTheSameColumnNeverShareASegment();
   testHoveringALinkHighlightsItAndBothEndpointRows();
+  testOpeningAnEntryPointDrawsThePillLink();
+  testExpandingAClassHeaderDrawsLinksToItsCollaborators();
 
   console.log("diagram-render-integration.test.js: all assertions passed");
+}
+
+/**
+ * AC1 requires "a link from the pill to the row of the entry-point method".
+ * The controller returned that link but nothing consumed it, so the pill sat
+ * on the canvas joined to nothing.
+ */
+function testOpeningAnEntryPointDrawsThePillLink() {
+  const { view } = loadReportScriptWithJoinableD3(fixture());
+
+  view.openEntryPointPill("entry-1");
+
+  const pillLinks = view.renderableLinks().filter((link) => link.fromPill);
+  assert.strictEqual(pillLinks.length, 1, "opening an entry point must draw exactly one pill link");
+  assert.strictEqual(pillLinks[0].targetMethodId, METHOD_UPDATE,
+      "the pill link must point at the entry method's row");
+  assert.ok(links(view).length >= 1, "that link must reach the DOM, not just the model");
+}
+
+/**
+ * The header expander reveals collaborator boxes; without links they arrive as
+ * unexplained rectangles. `renderableLinks` only walked expanded method rows,
+ * so header expansion drew boxes and zero links.
+ */
+function testExpandingAClassHeaderDrawsLinksToItsCollaborators() {
+  const { view } = loadReportScriptWithJoinableD3(fixture());
+
+  view.openEntryPointPill("entry-1");
+  const boxesBefore = view.controller.diagram.boxes.size;
+  view.toggleClassHeader(CONTROLLER_CLASS);
+
+  assert.ok(view.controller.diagram.boxes.size > boxesBefore,
+      "precondition: expanding the header reveals at least one collaborator box");
+
+  const collaboratorLinks = view.renderableLinks().filter((link) => !link.fromPill);
+  assert.ok(collaboratorLinks.length > 0,
+      "a revealed collaborator must be joined by a link, not left floating");
+
+  const drawn = links(view).length;
+  view.toggleClassHeader(CONTROLLER_CLASS);
+  assert.ok(links(view).length < drawn, "collapsing the header must take its links away again");
 }
 
 /**
@@ -140,7 +183,8 @@ function testLinksToDifferentClassesInTheSameColumnNeverShareASegment() {
   view.toggleMethodRow(METHOD_UPDATE, CONTROLLER_CLASS, "entry-1");
 
   const drawnLinks = links(view);
-  assert.strictEqual(drawnLinks.length, 5, "one link per resolved call from the constructor");
+  assert.strictEqual(drawnLinks.length, 6,
+      "the pill -> entry-method link plus one per resolved call from the constructor");
 
   const seenSegmentKeys = new Set();
   for (const link of drawnLinks) {
@@ -303,8 +347,9 @@ function testExpandingRendersEveryCompartmentWithMarkersAndStereotype(view) {
 
 function testExpandingRendersOneLinkPerCallWithNoSharedSegment(view) {
   const drawnLinks = links(view);
-  assert.strictEqual(drawnLinks.length, 3,
-      "one link per resolved call: the private validate() call plus the two repository calls (spec 007 §4.3)");
+  assert.strictEqual(drawnLinks.length, 4,
+      "the pill -> entry-method link (spec 007 §4.1) plus one per resolved call: "
+      + "the private validate() call and the two repository calls (spec 007 §4.3)");
 
   const dashed = drawnLinks.filter((link) => (link.getAttribute("class") || "").includes("class-link-dashed"));
   assert.strictEqual(dashed.length, 1, "only the private same-class call is dashed");
