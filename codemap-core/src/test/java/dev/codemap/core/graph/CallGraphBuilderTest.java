@@ -111,6 +111,50 @@ class CallGraphBuilderTest {
             });
         }
 
+        /**
+         * The receiver-type fallback counts only DECLARED methods, so an
+         * inherited method of the same name is invisible to its "exactly one
+         * candidate" check. A wrong guess here is worse than no edge: it is
+         * stamped resolved:true, which the project's invariants reserve for
+         * facts.
+         */
+        @Test
+        @DisplayName("does not guess a target when an inherited method shares the name")
+        void doesNotGuessAcrossInheritance() throws IOException {
+            writeClass("Parent", """
+                    package com.example;
+
+                    public class Parent {
+                        public void go(String only) { }
+                    }
+                    """);
+            writeClass("Child", """
+                    package com.example;
+
+                    public class Child extends Parent {
+                        public void go(int a, int b) { }
+                    }
+                    """);
+            writeClass("Caller", """
+                    package com.example;
+
+                    public class Caller {
+                        private final Child child = new Child();
+
+                        public void call() {
+                            this.child.go(unresolvable());
+                        }
+                    }
+                    """);
+
+            List<CallEdge> edges = buildEdges();
+
+            assertThat(edges)
+                    .filteredOn(edge -> edge.from().equals("com.example.Caller#call()"))
+                    .filteredOn(CallEdge::resolved)
+                    .noneMatch(edge -> edge.to().contains("go("));
+        }
+
         @Test
         @DisplayName("keeps a call whose argument the solver cannot type-check")
         void unresolvableArgumentDoesNotLoseTheWholeCall() throws IOException {

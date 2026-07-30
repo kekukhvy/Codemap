@@ -1878,7 +1878,6 @@
       /** The entry method's underline, which no link owns and cleanup must not drop. */
       this.entryUnderlinedMethodId = null;
       this.openPillId = null;
-      this.hasFittedView = false;
       this.setupZoom();
     }
 
@@ -1982,9 +1981,26 @@
       const parentPath = this.expandedMethodRows.get(methodId);
       this.expandedMethodRows.delete(methodId);
       if (parentPath !== undefined) {
+        const retired = methodRowPath(methodId, parentPath);
         this.controller.collapseMethodRow(methodId, parentPath);
+        // The diagram retires the collapsed path AND everything nested beneath
+        // it, so this ledger has to do the same. Dropping only the clicked row
+        // left descendants marked as expanded: re-opening the outer row then
+        // resurrected an expansion nobody asked for, and the stranded row's
+        // next click ran collapse instead of expand.
+        this.forgetRowsBeneath(retired);
       }
       this.clearUnderlinesWithoutLinks();
+    }
+
+    /** Drops ledger entries for every row expanded through `retiredPath`. */
+    forgetRowsBeneath(retiredPath) {
+      const nestedPrefix = retiredPath + PATH_SEPARATOR;
+      for (const [rowId, rowParentPath] of [...this.expandedMethodRows]) {
+        if (rowParentPath === retiredPath || rowParentPath.startsWith(nestedPrefix)) {
+          this.expandedMethodRows.delete(rowId);
+        }
+      }
     }
 
     /** Drops underlines whose link no longer exists, so no row stays marked as a target. */
@@ -2237,7 +2253,18 @@
     /** The expander path a method row's own expansion should be scoped beneath (spec 007 §6.2). */
     expanderPathFor(classId) {
       const box = this.controller.diagram.boxFor(classId);
-      return box ? [...box.revealingPaths][0] : this.openPillId;
+      if (!box || box.revealingPaths.size === 0) {
+        return this.openPillId;
+      }
+      // Shortest first, ties broken lexically. Set iteration order follows
+      // insertion, so picking [0] handed out whichever path happened to be
+      // added first: collapsing an unrelated sibling that owned that path then
+      // retired an expansion made through it, leaving a row marked expanded
+      // with none of its links. The shortest path is also the most durable —
+      // it is the one closest to the entry point, so it survives the most
+      // collapses.
+      return [...box.revealingPaths]
+          .sort((left, right) => left.length - right.length || left.localeCompare(right))[0];
     }
 
     /**

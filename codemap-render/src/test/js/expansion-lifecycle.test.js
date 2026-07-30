@@ -16,7 +16,8 @@ const assert = require("assert");
 const { loadReportScriptWithJoinableD3 } = require("./report-test-harness");
 
 /**
- * Alpha.entry() -> Beta.run() -> Gamma.deep()
+ * Alpha.entry()  -> Beta.run() -> Gamma.deep()
+ * Alpha.second() -> Beta.run()          (a second route to the same box)
  * plus Alpha.entry() -> Alpha.helper() (private, reveal-only)
  */
 function fixture() {
@@ -40,6 +41,7 @@ function fixture() {
     classes: [cls("Alpha", "CONTROLLER"), cls("Beta", "SERVICE"), cls("Gamma", "INFRASTRUCTURE"), cls("Delta", "CONTROLLER")],
     methods: [
       method("Alpha#entry()", "Alpha", "entry", "PUBLIC"),
+      method("Alpha#second()", "Alpha", "second", "PUBLIC"),
       method("Alpha#helper()", "Alpha", "helper", "PRIVATE"),
       method("Beta#run()", "Beta", "run", "PUBLIC"),
       method("Gamma#deep()", "Gamma", "deep", "PUBLIC"),
@@ -48,7 +50,8 @@ function fixture() {
     edges: [
       { from: "Alpha#entry()", to: "Beta#run()", kind: "CALL_EXTERNAL", resolved: true, line: 3 },
       { from: "Alpha#entry()", to: "Alpha#helper()", kind: "CALL_INTERNAL", resolved: true, line: 4 },
-      { from: "Beta#run()", to: "Gamma#deep()", kind: "CALL_EXTERNAL", resolved: true, line: 3 }
+      { from: "Beta#run()", to: "Gamma#deep()", kind: "CALL_EXTERNAL", resolved: true, line: 3 },
+      { from: "Alpha#second()", to: "Beta#run()", kind: "CALL_EXTERNAL", resolved: true, line: 6 }
     ],
     moduleDependencies: [], removedMethods: []
   };
@@ -64,6 +67,8 @@ function run() {
   testSwitchingEntryPointsClearsTheCanvas();
   testPrivateRowUnrevealsWhenItsCallerCollapses();
   testUnderlinesAreDroppedOnCollapse();
+  testNestedRowsAreForgottenWhenTheirParentCollapses();
+  testExpanderPathIsDeterministicAndDurable();
 
   console.log("expansion-lifecycle.test.js: all assertions passed");
 }
@@ -153,6 +158,46 @@ function testUnderlinesAreDroppedOnCollapse() {
       "no link points at it any more, so the underline must go");
   assert.ok(view.underlinedMethodIds.has("Alpha#entry()"),
       "the entry method's own underline is owned by the pill and must survive");
+}
+
+/** The diagram retires nested paths; the view's ledger must agree. */
+function testNestedRowsAreForgottenWhenTheirParentCollapses() {
+  const { view } = newView();
+  view.openEntryPointPill("ep1");
+  view.expandMethodRow("Alpha#entry()", "Alpha", view.expanderPathFor("Alpha"));
+  view.render();
+  view.expandMethodRow("Beta#run()", "Beta", view.expanderPathFor("Beta"));
+  assert.ok(view.expandedMethodRows.has("Beta#run()"), "precondition: the nested row is expanded");
+
+  view.collapseMethodRow("Alpha#entry()");
+
+  assert.strictEqual(view.expandedMethodRows.has("Beta#run()"), false,
+      "a row expanded through the collapsed one must not stay marked expanded");
+}
+
+/**
+ * A box reached by several routes must hand out a stable expander path.
+ * Taking whichever set member happened to be inserted first meant an expansion
+ * could be scoped under a path that an unrelated collapse then retired,
+ * leaving the row marked expanded with none of its links.
+ */
+function testExpanderPathIsDeterministicAndDurable() {
+  const { view } = newView();
+  view.openEntryPointPill("ep1");
+  const box = view.controller.diagram.boxFor("Alpha");
+
+  // Reached three ways, inserted longest-first.
+  box.revealingPaths.clear();
+  box.revealingPaths.add("ep1>a>b>c");
+  box.revealingPaths.add("ep1>z");
+  box.revealingPaths.add("ep1>a");
+
+  const first = view.expanderPathFor("Alpha");
+  const again = view.expanderPathFor("Alpha");
+
+  assert.strictEqual(first, again, "the same state must always yield the same path");
+  assert.strictEqual(first, "ep1>a",
+      "the shortest path wins: it sits closest to the entry point and survives the most collapses");
 }
 
 run();

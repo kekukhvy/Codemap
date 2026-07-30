@@ -7,6 +7,7 @@ import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.resolution.declarations.ResolvedConstructorDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedReferenceTypeDeclaration;
+import com.github.javaparser.resolution.MethodUsage;
 import dev.codemap.core.model.CallEdge;
 import dev.codemap.core.model.EdgeKind;
 import dev.codemap.core.parse.MethodOwner;
@@ -169,16 +170,20 @@ final class CallExpressionResolver {
 
         List<ResolvedMethodDeclaration> named;
         try {
-            named = receiver.get().getDeclaredMethods().stream()
-                    .filter(method -> method.getName().equals(call.getNameAsString()))
-                    .toList();
+            named = candidateMethods(receiver.get(), call);
         } catch (RuntimeException e) {
             log.debug("Could not list methods of {} at line {}: {}", toClassId, line, e.getMessage());
             return Optional.empty();
         }
         if (named.size() != 1) {
-            // No candidates, or several overloads: without argument types there is
+            // No candidates, or several that fit: without argument types there is
             // no honest way to choose, so record nothing rather than guess.
+            return Optional.empty();
+        }
+        // Only the declaring type's own methods produce an edge here. An
+        // inherited match means the real target lives in a supertype, and
+        // pointing at the subclass would be a fabrication.
+        if (!ResolvedMethodIds.classIdOf(named.get(0)).equals(toClassId)) {
             return Optional.empty();
         }
 
@@ -197,6 +202,37 @@ final class CallExpressionResolver {
         log.debug("Recovered call {} on {} at line {} via its receiver type",
                 call.getNameAsString(), toClassId, line);
         return Optional.of(new CallEdge(fromId, toId, kind, true, line, null, null));
+    }
+
+    /**
+     * Methods of the receiver's type that could satisfy this call.
+     *
+     * <p>Includes inherited methods and matches the argument count. Counting only
+     * declared methods made an inherited method of the same name invisible, so a
+     * class that inherited {@code go(String)} and declared {@code go(int, int)}
+     * looked like it had exactly one candidate — and a one-argument call was
+     * recorded against the two-argument method, stamped {@code resolved: true}.
+     * Arity is the one thing that can still be checked when the argument types
+     * themselves are what failed to resolve.
+     */
+    private List<ResolvedMethodDeclaration> candidateMethods(
+            ResolvedReferenceTypeDeclaration receiver, MethodCallExpr call) {
+
+        return receiver.getAllMethods().stream()
+                .map(MethodUsage::getDeclaration)
+                .filter(method -> method.getName().equals(call.getNameAsString()))
+                .filter(method -> acceptsArgumentCount(method, call.getArguments().size()))
+                .distinct()
+                .toList();
+    }
+
+    /** Whether a declaration can take this many arguments, allowing for varargs. */
+    private boolean acceptsArgumentCount(ResolvedMethodDeclaration method, int argumentCount) {
+        int declared = method.getNumberOfParams();
+        if (declared > 0 && method.getLastParam().isVariadic()) {
+            return argumentCount >= declared - 1;
+        }
+        return declared == argumentCount;
     }
 
     /** The declared type of a call's receiver, when the solver can name it. */
