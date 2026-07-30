@@ -47,18 +47,28 @@ a live HTTP request and which is dead code.
 Codemap roots the map in the places the outside world can reach:
 
 ```
-kairos-api                           ← module root
-└── POST /api/v1/tasks               ← entry point
-    └── TaskHandler.create()         ← focused method, siblings visible
-        ├╌ validate()                ╌ dashed: same class
-        └─→ CreateTaskUseCase        → solid: crosses into another class
-            └── execute()
-                └─→ TaskRepository.save()
-                    ═══ common       ═ heavy: crosses a module boundary
+  [POST /api/v1/tasks]  ← entry point pill
+         ↓
+    ┌─ TaskHandler ─(+)─┐  ← class box; (+) expands to show collaborators
+    │ + create()        │  ← entry method (underlined)
+    │ - validate()      │
+    └───────────────────┘
+         ↓ calls
+    ┌─ CreateTaskUseCase ─(+)─┐
+    │ + execute()             │
+    │ + validate()            │
+    └─────────────────────────┘
+         ↓ calls
+    ┌─ TaskRepository ─(+)─┐
+    │ + save()            │
+    │ + findById()        │
+    └─────────────────────┘
 ```
 
 Everything under an entry point is reachable at runtime. That makes the map a
-map of behaviour, and it makes dead code visible by absence.
+map of behaviour, and it makes dead code visible by absence. Each class box
+shows its public methods and their collaborators; expand any method to walk
+deeper into the call graph.
 
 Each build module is its own root, because that is how such systems are
 deployed — separate processes, separate containers. Where modules genuinely
@@ -211,73 +221,103 @@ Open `report.html` in any browser (Chrome, Firefox, Safari, etc.). It works over
 to a code review and it still works. All assets (CSS, JavaScript, D3, and the
 index data) are embedded in the single file.
 
-### The tree
+### The diagram
 
-Modules appear at the top level. Click a module to reveal its entry points, and
-an entry point to reveal the method it starts from. From there each method
-expands into the methods it calls.
+The canvas displays **entry-point pills** (rounded boxes showing REST routes, scheduled
+jobs, and other entry points) and **class rectangles** (UML-style boxes showing each
+class touched by an entry point or any call chain from it).
 
-The tree **grows as you expand it**. Codemap never renders the whole call graph
-upfront — that explodes in size and loops forever on recursion. One level is
-shown; the next arrives when you click a node (its circle or its name).
+Click an **entry point pill** to draw its declaring class box. The entry-point method
+(the one the entry point targets) is underlined in the class box, with a link from the
+pill pointing to it. From there you expand outward through collaborating classes.
 
-### Edge styles and cycles
+### Class boxes
 
-From a method, edges show what it calls:
+Each class box shows three sections (omitting empty ones):
 
-- **`╌╌` dashed edge** — a call inside the same class; you stay in the card.
-- **`──→` solid edge** — a call into another class; the node expands to show all
-  of them at once.
-- **`═══` heavy connector** — the call crosses into another module. Collapsed by
-  default to keep the tree readable; expand it to jump to the other module.
+1. **Constructors** — listed at the top
+2. **Public methods** — the class's public API
+3. **Private methods** — only those called by visible public methods
 
-**Revisiting a method** already expanded higher in the same branch renders it
-collapsed with an **`↗ already above` badge** that jumps back to the original. This
-stops cycles, and you can see at a glance that it is the same method.
+Each method row is prefixed with a **UML visibility marker**:
+- **`+`** — public
+- **`#`** — protected
+- **`~`** — package-private
+- **`-`** — private
+
+The box header shows the class name and its architectural layer (its `@Layer` annotation,
+if present). A **`(+)` expander** on the header reveals what classes this class collaborates
+with — every class it calls at least one method on.
+
+### Expanding calls
+
+Click the **`(+)` expander on a method row** to see what that method calls:
+
+- **Solid links** → calls to public methods of other classes. The target class box is
+  drawn (or reused if already on canvas), and the target method row is underlined.
+- **Dashed links** → calls to private methods of the same class. The private method row
+  is added to the box's third compartment (becoming visible and itself expandable).
+- **Self-links** (a small loop) → calls to other public methods of the same class, also
+  underlined.
+
+A method calling two methods of one class draws **two links**, one per target. This
+visibility lets you follow which collaborators matter most.
+
+### Link routing
+
+Links between boxes are **orthogonal polylines** (horizontal and vertical segments only),
+routed in **lanes** so they do not cross boxes or overlap each other. The spacing
+automatically adjusts as you expand more boxes, keeping the layout stable and readable.
+Hover a link to highlight it and both endpoint rows, making long routes easy to follow.
+
+### Class uniqueness
+
+A class appears **exactly once** on the canvas, keyed by its name. If two different call
+paths both reach the same class, they share the same box — you see it is a shared
+collaborator, not two separate instances. Collapsing one caller does not remove a box
+that another expanded path still reaches.
 
 ### Side panel
 
-Click any method name (or its circle) to open the side panel. It shows:
+Click a **class name** to open the side panel showing:
 
-- **Method signature** — the full name, parameters, and return type
-- **Layer and module badges** — architecture layers and the build module it lives in
-- **File path and line range** — where to find it in the real code
-- **Javadoc summary** — the first sentence, if one exists
-- **Called by** — every method that calls this one, as navigable links. Walk a
-  chain backward from a repository to the entry points that reach it.
-- **Calls** — every method this one calls, as navigable links. Walk a chain
-  forward from an entry point to the database.
-- **Real source** — the actual method body, sliced from the file by line range.
+- **Calls** — every class this one calls at least one method on (class-granular, not
+  method-by-method)
+- **Called by** — every class that calls at least one method of this one
+- **Full class source** — the entire class body, so you can read it inline
 
-Both **Called by** and **Calls** are navigable, so any chain can be walked
-in both directions without leaving the map.
+Click a **method row name** to open the side panel showing:
 
-Types are shown too: selecting a type used in a signature (`User`) lists where it
-is used and what methods it declares. Note this is a *usage* relation, not a call
-— a type does not invoke anything, so chains do not continue through it.
+- **Called by** — every class that calls this method (class names, not individual call sites)
+- **Method source** — the full method body
+
+Both panels are navigable — click a class or method name to jump to it elsewhere on the
+canvas or in the index.
 
 ### Change highlighting
 
-Layered on top of the structure, not the point of it:
+Change status is layered on top of the structure:
 
-| Outline | Status | Meaning |
+| Border | Status | Meaning |
 |---|---|---|
-| 🟢 Green | `changed` / `added` | Lines fall inside the git diff |
-| 🔴 Red, struck through | `removed` | Existed in the base, gone now |
-| 🟡 Yellow | `affected` | Not edited, but one call hop from something that was |
-| ⚪ None | `unchanged` | Untouched |
+| **Solid green** | `ADDED` | Class is new in this branch; header also filled green |
+| **Solid green** | `CHANGED` | Class exists in base; only changed rows are highlighted green |
+| **Dashed amber** | `AFFECTED` | Class untouched, but a method it calls was changed |
+| **None** | `UNCHANGED` | Untouched |
 
-`affected` surfaces the callers and callees of your edits — the code most likely
-to break without appearing in the diff.
+Status is shown by border colour and style, and optionally a glyph in the header, so it
+reads correctly for colour-blind readers. `REMOVED` methods are listed in the side panel
+only, since there is no class box to draw them on.
 
 ### Controls
 
 - **Focus on changes** — collapse everything except paths to changed nodes. Useful
   when reviewing large diffs.
-- **Search** — filter the tree by class or method name.
+- **Search** — filter the diagram by class or method name.
 - **Layer filter** — show or hide architectural layers. Quickly hide framework
   wiring to focus on domain logic.
-- **Module filter** — narrow the map to a single build module.
+- **Module filter** — narrow the diagram to a single build module.
+- **Light/dark theme toggle** — choose your preferred reading mode.
 
 ---
 

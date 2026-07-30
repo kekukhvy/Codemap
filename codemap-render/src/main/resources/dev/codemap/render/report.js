@@ -975,6 +975,8 @@
   const BOX_VERTICAL_GAP = 24;
   const PILL_WIDTH = 160;
   const PILL_HEIGHT = 34;
+  /** Baseline drop from a row's top edge to its text, so glyph and label align. */
+  const ROW_LABEL_BASELINE_OFFSET = 14;
 
   /** The pixel height a box needs for its current compartments (spec 007 §2.2). */
   function boxHeight(compartments) {
@@ -1076,6 +1078,7 @@
       this.viewport = this.svg.append("g").attr("class", "viewport");
       this.selection = null;
       this.underlinedMethodIds = new Set();
+      this.expandedMethodRows = new Set();
       this.openPillId = null;
       this.hasFittedView = false;
       this.setupZoom();
@@ -1121,7 +1124,7 @@
 
     /** The method-row `(+)`/`(−)` expander (spec 007 §4.3). */
     toggleMethodRow(methodId, ownerClassId, parentPath) {
-      if (this.expandedMethodRows && this.expandedMethodRows.has(methodId)) {
+      if (this.expandedMethodRows.has(methodId)) {
         this.collapseMethodRow(methodId, parentPath);
       } else {
         this.expandMethodRow(methodId, ownerClassId, parentPath);
@@ -1136,16 +1139,13 @@
           this.underlinedMethodIds.add(link.targetMethodId);
         }
       }
-      this.expandedMethodRows = this.expandedMethodRows || new Set();
       this.expandedMethodRows.add(methodId);
       return result;
     }
 
     collapseMethodRow(methodId, parentPath) {
       this.controller.collapseMethodRow(methodId, parentPath);
-      if (this.expandedMethodRows) {
-        this.expandedMethodRows.delete(methodId);
-      }
+      this.expandedMethodRows.delete(methodId);
     }
 
     /** Clicking a class name (spec 007 §4.2): opens the side panel, never touches the canvas. */
@@ -1275,7 +1275,7 @@
       }
       for (const method of methods) {
         this.renderMemberRow(group, d, method, y, isPrivateCompartment);
-        this.methodRowPositions.set(method.id, { classId: d.classId, rect: d.rect, rowY: d.rect.y + y + 14 });
+        this.methodRowPositions.set(method.id, { classId: d.classId, rect: d.rect, rowY: d.rect.y + y + ROW_LABEL_BASELINE_OFFSET });
         y += ROW_HEIGHT;
       }
       return y;
@@ -1286,9 +1286,9 @@
       const classes = rowCssClasses(method.status, underlined).concat(isPrivateCompartment ? ["member-row-private"] : []);
       const label = visibilityMarker(method.visibility) + " " + method.signature;
       group.append("text").attr("class", classes.join(" ")).attr(MEMBER_ROW_METHOD_ID_ATTRIBUTE, method.id)
-          .attr("x", 12).attr("y", y + 14).text(label)
+          .attr("x", 12).attr("y", y + ROW_LABEL_BASELINE_OFFSET).text(label)
           .on("click", () => this.navigateToMethod(method.id));
-      group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", y + 14).text("(+)")
+      group.append("text").attr("class", "expander").attr("x", d.rect.width - 16).attr("y", y + ROW_LABEL_BASELINE_OFFSET).text("(+)")
           .on("click", () => this.toggleMethodRow(method.id, d.classId, this.expanderPathFor(d.classId)));
     }
 
@@ -1306,7 +1306,7 @@
     renderableLinks() {
       const links = [];
       const seenIds = new Set();
-      for (const methodId of this.expandedMethodRows || []) {
+      for (const methodId of this.expandedMethodRows) {
         const method = this.index.method(methodId);
         if (!method) {
           continue;

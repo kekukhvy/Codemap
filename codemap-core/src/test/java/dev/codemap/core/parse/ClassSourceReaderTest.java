@@ -51,4 +51,48 @@ class ClassSourceReaderTest {
 
         assertThat(source).isEmpty();
     }
+
+    @Test
+    @DisplayName("refuses a relative path that escapes the project root")
+    void refusesTraversalOutsideRoot() throws IOException {
+        Path outside = projectRoot.getParent().resolve("outside-secret.txt");
+        Files.writeString(outside, "a-secret-the-report-must-not-embed\n");
+
+        String source = ClassSourceReader.read(projectRoot, "../" + outside.getFileName(), 1, 1);
+
+        assertThat(source).isEmpty();
+    }
+
+    @Test
+    @DisplayName("refuses an absolute path, which would discard the project root entirely")
+    void refusesAbsolutePath() throws IOException {
+        Path outside = projectRoot.getParent().resolve("outside-absolute.txt");
+        Files.writeString(outside, "another-secret\n");
+
+        String source = ClassSourceReader.read(projectRoot, outside.toAbsolutePath().toString(), 1, 1);
+
+        assertThat(source).isEmpty();
+    }
+
+    @Test
+    @DisplayName("degrades rather than throwing when the path itself is malformed")
+    void degradesForMalformedPath() {
+        String nameWithNulByte = "Sample\u0000.java";
+
+        String source = ClassSourceReader.read(projectRoot, nameWithNulByte, 1, 4);
+
+        assertThat(source).isEmpty();
+    }
+
+    @Test
+    @DisplayName("still reads a file in a subdirectory of the project root")
+    void readsNestedFile() throws IOException {
+        Path nested = projectRoot.resolve("src/main/java");
+        Files.createDirectories(nested);
+        Files.writeString(nested.resolve(FILE_NAME), "class Sample {\n}\n");
+
+        String source = ClassSourceReader.read(projectRoot, "src/main/java/" + FILE_NAME, 1, 2);
+
+        assertThat(source).isEqualTo("class Sample {\n}");
+    }
 }

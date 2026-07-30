@@ -65,35 +65,39 @@ reviewing a PR, or reorienting before a change.
 
 ## 3. Core model
 
-### 3.1 The graph is the structure; the tree is a view
+### 3.1 The graph is the structure; the diagram is a view
 
 The underlying data is a **directed graph** of methods connected by calls. It is
 not a tree: a method is reachable from several entry points, and cycles occur
 through recursion and mutual calls.
 
-The mindmap presents this graph as a tree that **grows on expansion**. Codemap
-never materialises the full reachable set upfront. One level is rendered; the
-next is produced when the user opens a node.
+The report presents this graph as a **UML class diagram** where the unit of the
+diagram is the **class box**, not the method. Methods are rows inside a box;
+classes are keyed by identity, so a shared collaborator is visibly shared and
+never appears twice on the canvas. The diagram grows on expansion: each box
+expander reveals its callees, and the tree-grows-on-expansion invariant is
+preserved — it is what terminates cycles and keeps the map tractable.
 
-This single decision resolves three problems at once:
+**Uniqueness invariant:** A class is drawn at most once on the canvas, keyed by
+`classId`. When expansion reaches a class already drawn, a link is drawn to the
+existing box rather than creating a duplicate. This solves the core problem of
+the old tree form: a shared collaborator (e.g., `ProcessContext`) reached from
+multiple callers now visibly sits in one box, with connectors from each caller.
 
-| Problem | Resolution |
-|---|---|
-| Combinatorial explosion | Only expanded paths are ever rendered |
-| Cycles | A user cannot loop infinitely by hand; revisits are marked |
-| Shared nodes (e.g. a model used everywhere) | Duplicated only where actually opened |
+**Private rows are reveal-only:** The box initially shows constructors and public
+methods. Private and package-private methods appear only when a visible method in
+the same box is expanded and calls them, joined by a dashed link. Collapsing an
+expander removes only the private rows that expander revealed; the box stays if
+other expanded paths still reach it. This keeps boxes readable while allowing the
+reader to walk implementations downwards on demand.
 
-**Revisit rule.** When expansion reaches a method already expanded higher in the
-current branch, it renders collapsed with an `↗ already above` badge linking to
-the original occurrence. The cycle terminates and the identity stays visible.
-
-**Tree layout direction.** The rendered tree grows left-to-right: depth advances
-horizontally along the x-axis, and siblings stack vertically along the y-axis.
-This layout is chosen because Java identifiers are long and a label is always
-drawn to the right of its node: stacking siblings vertically means two labels can
-only collide if they are closer than a line's height, whereas a top-down layout
-must space siblings by label *width*, which is unbounded. It is an implementation
-choice and does not constrain §3.1's requirement that the tree grow on expansion.
+**Layered column layout:** Boxes are positioned in columns by call depth from the
+entry point (depth 0 is the entry point's declaring class, depth 1 is its
+callees, etc.). Within a column, boxes are ordered to minimise link crossings.
+An expander always positions new boxes in free space; collapsing does not move
+boxes already on the canvas. Links are drawn as orthogonal polylines with
+deterministic routing that avoids crossing box rectangles and does not share
+segments between parallel edges.
 
 ### 3.2 Node kinds
 
@@ -472,7 +476,7 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
   "classes":  [ { "id","moduleId","fqn","simpleName","packageName","kind",
                   "layer","file","lineStart","lineEnd","javadoc","status" } ],
   "methods":  [ { "id","classId","name","signature","file","lineStart",
-                  "lineEnd","javadoc","source","constructor","status" } ],
+                  "lineEnd","javadoc","source","constructor","visibility","status" } ],
   "calls":    [ { "from","to","kind","resolved","line","fromModuleId","toModuleId" } ],
   "entryPoints": [ { "id","moduleId","kind","label","methodId",
                      "detectedBy","source" } ],
@@ -482,6 +486,14 @@ degrade to a name-based edge marked `resolved: false` rather than failing the ru
                   "methodsIndexed","skipped": [ { "file","reason" } ] }
 }
 ```
+
+Each method in the `methods` array carries:
+- `id`: method id including parameter types, e.g., `com.example.Task#update(TaskEdit, Instant)`
+- `visibility`: Java access level (`PUBLIC`, `PROTECTED`, `PACKAGE`, or `PRIVATE`), read from
+  the declaration's modifiers (spec 007 §5.1). Interface methods are implicitly `PUBLIC` when
+  unqualified; record canonical constructors are `PUBLIC` (JLS 8.10.4); anything unreadable
+  defaults to `PACKAGE` rather than failing the run, per the degrade-never-fail invariant.
+  This field defaults to `PACKAGE` for indices written without it, so older indices still deserialize.
 
 Each edge in the `calls` array carries:
 - `from`: source method id (e.g., `com.example.Task#update(TaskEdit, Instant)`)
@@ -539,8 +551,10 @@ still work.
 2. An assignment of the escaped view model to `window.__CODEMAP_DATA__`
 3. The interactive report script that populates the UI and wires up navigation
 
-CSS is similarly inlined. Method source is embedded in the index rather than read
-at view time, since the browser cannot read local files under `file://`.
+CSS is similarly inlined. Method source is embedded in the index; class source
+is embedded in the view model only (not in `index.json`), so the index does not
+double in size carrying class bodies next to method bodies. Both are necessary
+because the browser cannot read local files under `file://`.
 
 **Security model.** The page declares a Content-Security-Policy of
 `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'`.
@@ -550,8 +564,9 @@ enforces the self-containment invariant at runtime rather than relying on
 convention alone, and means that even if an escaping bug let untrusted markup out,
 it could not reach the network to exfiltrate the source text the report embeds.
 
-**Escaping embedded source.** The index embeds untrusted Java source text (method
-bodies, comments, javadoc) into a `<script>` element as part of a JSON object.
+**Escaping embedded source.** The view model embeds untrusted Java source text
+(method bodies, class bodies, comments, javadoc) into a `<script>` element as
+part of a JSON object.
 Characters `<`, `>`, `&`, U+2028 (line separator), and U+2029 (paragraph
 separator) are escaped as JSON `\uXXXX` escapes. This is character-level escaping
 of the *characters themselves*, not sequence matching, because the HTML tokenizer
@@ -570,7 +585,7 @@ done.
 
 - [ ] Runs on a real project with one command and does not crash.
 - [ ] `report.html` opens in a browser with no server and no console errors.
-- [ ] The tree shows real packages, classes, and methods — no placeholders.
+- [ ] The diagram shows class boxes, each with constructors and public methods in compartments.
 - [ ] Each build module is its own root; entry points hang beneath their module.
 - [ ] Cross-module connectors are drawn and a module-level overview is available.
 - [ ] No test source appears anywhere in the map.
@@ -578,10 +593,9 @@ done.
 - [ ] Programmatic (non-annotated) REST routes are detected with method and path.
 - [ ] Clicking a method shows its genuine source, sliced from the file.
 - [ ] The side panel lists **Called by** and **Calls**, both navigable.
-- [ ] Same-class calls render dashed; cross-class calls render as arrows.
-- [ ] A revisited node shows `↗ already above` and does not loop.
-- [ ] After a test edit, at least one node shows `changed` and is outlined green.
-- [ ] Neighbours of a changed method show `affected`.
+- [ ] A class appears at most once on the canvas; expansion links to the existing box.
+- [ ] Private methods are absent initially and appear only when a visible method calls them.
+- [ ] After a test edit, changed and affected rows are coloured; status is visible without colour.
 - [ ] A rerun after a one-file edit is measurably faster than the first run.
 - [ ] `--ai` is off by default; with it on, results are cached and labelled.
 
@@ -634,8 +648,21 @@ methods, which makes it a real test of the exclusion rule in §3.6.
 
 ## 9. Deferred
 
-Deliberately out of the first version, recorded so the design does not preclude
-them:
+Deliberately out of the diagram implementation (spec 007), recorded so the design
+does not preclude them:
+
+- **Fields and attributes in class boxes.** The map is about behaviour, not data
+  structure. UML would show them; they are left out.
+- **Inheritance and interface-implementation arrows as UML generalisations.** The
+  `IMPLEMENTS` edges exist in the call graph but are not drawn as first-class UML
+  relations. They live in the index but not yet in the diagram.
+- **Manual box dragging and layout persistence.** Boxes position automatically by
+  call depth and barycentre ordering. Saving and restoring user-chosen positions
+  across reloads is deferred.
+- **SVG/PNG export.** The diagram renders to HTML/CSS/SVG but no export format
+  is exposed.
+
+Earlier deferrals:
 
 - Kotlin support.
 - A `--serve` mode with live re-indexing on file change.
