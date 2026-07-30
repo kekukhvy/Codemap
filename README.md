@@ -130,6 +130,7 @@ Use `--help` to see the flags.
 |---|---|---|
 | `--root <path>` | Java project to analyse | current directory |
 | `--base <branch>` | Branch to compare against | the repository's default branch |
+| `--pr <number>` | Compare against that pull request's base branch, read with the `gh` CLI | — |
 | `--since <commit>` | Compare against this exact commit instead of the branch point | — |
 | `--out <path>` | Where to write the report | `codemap/report.html` |
 | `--config <path>` | Custom entry-point rules | `codemap.yml` if present |
@@ -149,6 +150,7 @@ commits other people landed after you branched as though they were yours.
 ```bash
 codemap                     # this branch's changes (what your PR contains)
 codemap --base develop      # compare against a different branch
+codemap --pr 48             # compare against that pull request's base branch
 codemap --since HEAD~5      # compare against an exact commit instead
 ```
 

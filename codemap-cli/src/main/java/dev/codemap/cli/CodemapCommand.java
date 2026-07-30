@@ -2,6 +2,10 @@ package dev.codemap.cli;
 
 import dev.codemap.core.CodemapOptions;
 import dev.codemap.core.InvalidOptionsException;
+import dev.codemap.core.diff.GitCommandRunner;
+import dev.codemap.core.diff.PullRequestBase;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -41,6 +45,7 @@ import java.util.concurrent.Callable;
                 Examples:
                   codemap                              map here, diff this branch's changes
                   codemap --root ../service            map another project
+                  codemap --pr 48                      compare against that pull request's base
                   codemap --base develop               compare against a different branch
                   codemap --since HEAD~5               compare against an exact commit
                   codemap --ai                         classify unrecognised entry points
@@ -63,6 +68,13 @@ public final class CodemapCommand implements Callable<Integer> {
             description = "Branch to compare against. Default: the repository's default branch."
     )
     private String base;
+
+    @Option(
+            names = {"-p", "--pr"},
+            paramLabel = "<number>",
+            description = "Pull request to compare against; its base branch is read with the gh CLI."
+    )
+    private Integer pullRequest;
 
     @Option(
             names = {"-s", "--since"},
@@ -97,11 +109,14 @@ public final class CodemapCommand implements Callable<Integer> {
     )
     private boolean rebuild;
 
+    private static final Logger log = LoggerFactory.getLogger(CodemapCommand.class);
+
     private final CodemapRunner runner;
+    private final PullRequestBase pullRequestBase;
 
     /** Creates a command backed by the real pipeline runner. */
     public CodemapCommand() {
-        this(new CodemapRunner());
+        this(new CodemapRunner(), new PullRequestBase(new GitCommandRunner()));
     }
 
     /**
@@ -111,14 +126,26 @@ public final class CodemapCommand implements Callable<Integer> {
      * @param runner receives the validated options
      */
     CodemapCommand(CodemapRunner runner) {
+        this(runner, new PullRequestBase(new GitCommandRunner()));
+    }
+
+    /**
+     * Creates a command with both collaborators explicit, so a test can drive
+     * {@code --pr} without a {@code gh} binary or a network.
+     *
+     * @param runner receives the validated options
+     * @param pullRequestBase resolves a pull-request number to its base branch
+     */
+    CodemapCommand(CodemapRunner runner, PullRequestBase pullRequestBase) {
         this.runner = runner;
+        this.pullRequestBase = pullRequestBase;
     }
 
     @Override
     public Integer call() {
         CodemapOptions options = CodemapOptions.builder()
                 .root(root)
-                .base(base)
+                .base(resolveBase())
                 .since(since)
                 .output(out)
                 .config(config)
@@ -127,6 +154,37 @@ public final class CodemapCommand implements Callable<Integer> {
                 .build();
 
         return runner.run(options);
+    }
+
+    /**
+     * The branch to compare against, resolving {@code --pr} when given.
+     *
+     * <p>A reader always knows the pull-request number; which branch it targets
+     * is exactly the detail that is easy to get wrong, and getting it wrong is
+     * the difference between a map showing a handful of real changes and one
+     * painted almost entirely green.
+     *
+     * <p>An explicit {@code --base} wins: it is the more specific instruction.
+     * A pull request that cannot be resolved falls back to the default base
+     * rather than failing, and says so.
+     */
+    private String resolveBase() {
+        if (pullRequest == null) {
+            return base;
+        }
+        if (base != null) {
+            log.warn("Both --base and --pr given; comparing against {}", base);
+            return base;
+        }
+        return pullRequestBase.resolve(root, pullRequest)
+                .map(resolved -> {
+                    log.info("PR #{} targets {}", pullRequest, resolved);
+                    return resolved;
+                })
+                .orElseGet(() -> {
+                    log.warn("Could not resolve PR #{}; comparing against the default base branch", pullRequest);
+                    return null;
+                });
     }
 
     public static void main(String[] args) {

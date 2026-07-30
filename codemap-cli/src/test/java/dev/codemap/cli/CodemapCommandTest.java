@@ -2,6 +2,8 @@ package dev.codemap.cli;
 
 import dev.codemap.core.CodemapOptions;
 import dev.codemap.core.ComparisonMode;
+import dev.codemap.core.diff.GitCommandResult;
+import dev.codemap.core.diff.PullRequestBase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -17,17 +19,66 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CodemapCommandTest {
 
     private static final String[] DOCUMENTED_FLAGS =
-            {"--root", "--base", "--since", "--out", "--config", "--ai", "--rebuild"};
+            {"--root", "--base", "--pr", "--since", "--out", "--config", "--ai", "--rebuild"};
 
     private final RecordingRunner runner = new RecordingRunner();
     private final StringWriter out = new StringWriter();
     private final StringWriter err = new StringWriter();
 
     private int run(String... args) {
-        CommandLine commandLine = new CommandLine(new CodemapCommand(runner))
+        return run(new PullRequestBase((binary, directory, arguments) -> new GitCommandResult(false, "", "no gh")), args);
+    }
+
+    private int run(PullRequestBase pullRequestBase, String... args) {
+        CommandLine commandLine = new CommandLine(new CodemapCommand(runner, pullRequestBase))
                 .setOut(new PrintWriter(out, true))
                 .setErr(new PrintWriter(err, true));
         return CodemapCommand.execute(args, commandLine);
+    }
+
+    @Nested
+    @DisplayName("--pr")
+    class PullRequestFlag {
+
+        @Test
+        @DisplayName("compares against the branch the pull request targets")
+        void usesThePullRequestBase() {
+            PullRequestBase resolving = new PullRequestBase(
+                    (binary, directory, arguments) -> new GitCommandResult(true, "develop", ""));
+
+            run(resolving, "--root", ".", "--pr", "48");
+
+            assertThat(runner.options().base()).contains("develop");
+        }
+
+        /**
+         * A pull request that cannot be resolved — no gh, not logged in, no
+         * network — must leave the reader with the ordinary default rather than
+         * failing the run.
+         */
+        @Test
+        @DisplayName("falls back to the default base when the pull request cannot be resolved")
+        void degradesWhenUnresolvable() {
+            PullRequestBase failing = new PullRequestBase(
+                    (binary, directory, arguments) -> new GitCommandResult(false, "", "gh not found"));
+
+            int exitCode = run(failing, "--root", ".", "--pr", "48");
+
+            assertThat(exitCode).isEqualTo(ExitCode.SUCCESS);
+            assertThat(runner.options().base()).isEmpty();
+        }
+
+        /** The more specific instruction wins. */
+        @Test
+        @DisplayName("an explicit --base beats --pr")
+        void explicitBaseWins() {
+            PullRequestBase resolving = new PullRequestBase(
+                    (binary, directory, arguments) -> new GitCommandResult(true, "develop", ""));
+
+            run(resolving, "--root", ".", "--pr", "48", "--base", "main");
+
+            assertThat(runner.options().base()).contains("main");
+        }
     }
 
     @Nested
