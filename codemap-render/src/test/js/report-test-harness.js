@@ -358,8 +358,14 @@ function loadReportScriptWithJoinableD3(data) {
       documentElement,
       getElementById: () => stubElement(),
       createElement: () => stubElement(),
+      createTextNode: (text) => ({ nodeType: 3, textContent: text }),
       createDocumentFragment: () => stubElement(),
-      querySelector: () => stubElement()
+      querySelector: () => stubElement(),
+      // A real document dispatches events; report.js listens on it for the
+      // side-panel drag, which continues outside the handle it started on.
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      body: stubElement()
     },
     d3: {
       // `d3.select("#graph")` (a CSS selector string) means "the SVG root",
@@ -433,8 +439,14 @@ function loadReportScript(data, recording) {
       documentElement,
       getElementById: () => stubElement(),
       createElement: () => stubElement(),
+      createTextNode: (text) => ({ nodeType: 3, textContent: text }),
       createDocumentFragment: () => stubElement(),
-      querySelector: () => stubElement()
+      querySelector: () => stubElement(),
+      // A real document dispatches events; report.js listens on it for the
+      // side-panel drag, which continues outside the handle it started on.
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      body: stubElement()
     },
     d3: {
       select: () => stubD3Selection(viewportTransforms),

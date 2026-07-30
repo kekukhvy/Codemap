@@ -39,6 +39,7 @@ final class ReportPageAssembler {
                   <input type="search" id="search-input" placeholder="Search classes and methods...">
                   <select id="layer-filter"><option value="">All layers</option></select>
                   <select id="module-filter"><option value="">All modules</option></select>
+                  <button type="button" id="toggle-entry-points" title="Hide the entry-point list">Hide list</button>
                 </div>
               </header>
               <div id="entry-point-panel">
@@ -54,6 +55,7 @@ final class ReportPageAssembler {
                   </defs>
                 </svg>
               </div>
+              <div id="side-panel-resizer" title="Drag to resize"></div>
               <div id="side-panel"><div class="placeholder">Select a node to see details.</div></div>
             </div>
             <script>

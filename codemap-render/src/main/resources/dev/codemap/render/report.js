@@ -189,6 +189,33 @@
     return layer ? "«" + layer.toLowerCase() + "»" : "";
   }
 
+  const TOKEN_CLASS_PREFIX = "tok-";
+  const JAVA_WORD = /^[A-Za-z_$][A-Za-z0-9_$]*/;
+  /**
+   * Ordered: a keyword inside a comment or a string is not a keyword, so those
+   * are consumed whole before anything else gets a chance to look inside them.
+   */
+  const JAVA_TOKEN_PATTERNS = [
+    { kind: "comment", regex: /^\/\*[\s\S]*?(?:\*\/|$)/ },
+    { kind: "comment", regex: /^\/\/[^\n]*/ },
+    { kind: "string", regex: /^"""[\s\S]*?(?:"""|$)/ },
+    { kind: "string", regex: /^"(?:\\.|[^"\\\n])*"?/ },
+    { kind: "string", regex: /^'(?:\\.|[^'\\\n])*'?/ },
+    { kind: "annotation", regex: /^@[A-Za-z_$][A-Za-z0-9_$]*/ },
+    { kind: "number", regex: /^\d[\d_]*(?:\.[\d_]+)?[dDfFlL]?\b/ }
+  ];
+  const JAVA_KEYWORDS = new Set([
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const",
+    "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float",
+    "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native",
+    "new", "package", "private", "protected", "public", "record", "return", "sealed", "short",
+    "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient",
+    "try", "var", "void", "volatile", "while", "yield", "true", "false", "null"
+  ]);
+  const ENTRY_POINTS_HIDDEN_CLASS = "entry-points-hidden";
+  /** Bounds the side panel: narrow enough to be worth it, never swallowing the canvas. */
+  const SIDE_PANEL_MIN_WIDTH = 260;
+  const SIDE_PANEL_MAX_WIDTH = 900;
   const ENTRY_POINT_MARKER_CLASS = "entry-point-status";
   /** Explains the marker on hover, since a glyph alone does not say what it means. */
   const ENTRY_POINT_STATUS_TITLE = {
@@ -2574,9 +2601,71 @@
   }
 
   function sourceElement(sourceText) {
-    const element = textElement("pre", sourceText);
+    const element = document.createElement("pre");
     element.className = SOURCE_CLASS;
+    for (const token of tokenizeJava(sourceText)) {
+      if (token.kind === null) {
+        element.appendChild(document.createTextNode(token.text));
+        continue;
+      }
+      const span = document.createElement("span");
+      span.className = TOKEN_CLASS_PREFIX + token.kind;
+      // textContent, never innerHTML: this is untrusted source text, and the
+      // whole escaping model of the report depends on never parsing it as markup.
+      span.textContent = token.text;
+      element.appendChild(span);
+    }
     return element;
+  }
+
+  /**
+   * Splits Java source into display tokens for syntax highlighting.
+   *
+   * <p>Hand-written rather than a highlighting library: the report inlines
+   * everything it needs and must keep working over `file://` with no network, so
+   * a dependency would have to be vendored whole for one panel. This recognises
+   * what actually helps a reader skim a method — comments, strings, keywords,
+   * numbers, annotations — and deliberately leaves everything else alone rather
+   * than pretending to be a parser.
+   */
+  function tokenizeJava(source) {
+    const tokens = [];
+    let plain = "";
+    let index = 0;
+    const pushPlain = () => {
+      if (plain !== "") {
+        tokens.push({ kind: null, text: plain });
+        plain = "";
+      }
+    };
+    const pushToken = (kind, text) => {
+      pushPlain();
+      tokens.push({ kind, text });
+      index += text.length;
+    };
+
+    while (index < source.length) {
+      const rest = source.slice(index);
+      const match = JAVA_TOKEN_PATTERNS.find((pattern) => pattern.regex.test(rest));
+      if (match) {
+        pushToken(match.kind, rest.match(match.regex)[0]);
+        continue;
+      }
+      const word = rest.match(JAVA_WORD);
+      if (word) {
+        if (JAVA_KEYWORDS.has(word[0])) {
+          pushToken("keyword", word[0]);
+        } else {
+          plain += word[0];
+          index += word[0].length;
+        }
+        continue;
+      }
+      plain += source[index];
+      index += 1;
+    }
+    pushPlain();
+    return tokens;
   }
 
   // ---------------------------------------------------------------------
@@ -2664,6 +2753,64 @@
     button.textContent = theme === THEME_DARK ? "Light theme" : "Dark theme";
   }
 
+  /**
+   * The entry-point list folds away, giving the canvas the whole width.
+   *
+   * <p>Once a reader has picked an endpoint the list is dead weight, and a wide
+   * diagram is exactly what the map is for.
+   */
+  function wireEntryPointToggle() {
+    const button = document.getElementById("toggle-entry-points");
+    const app = document.getElementById("app");
+    if (!button || !app) {
+      return;
+    }
+    button.addEventListener("click", () => {
+      const hidden = app.classList.toggle(ENTRY_POINTS_HIDDEN_CLASS);
+      button.textContent = hidden ? "Show list" : "Hide list";
+      button.title = hidden ? "Show the entry-point list" : "Hide the entry-point list";
+      button.classList.toggle("active", hidden);
+    });
+  }
+
+  /**
+   * Drags the boundary between canvas and side panel.
+   *
+   * <p>The panel holds whole class bodies, so how much room it deserves depends
+   * on what the reader is doing — reading source wants it wide, following links
+   * wants it out of the way.
+   */
+  function wireSidePanelResizer() {
+    const resizer = document.getElementById("side-panel-resizer");
+    const app = document.getElementById("app");
+    if (!resizer || !app) {
+      return;
+    }
+    let dragging = false;
+
+    const widthFromPointer = (clientX) => {
+      const proposed = app.getBoundingClientRect().right - clientX;
+      return Math.min(SIDE_PANEL_MAX_WIDTH, Math.max(SIDE_PANEL_MIN_WIDTH, proposed));
+    };
+
+    resizer.addEventListener("mousedown", (event) => {
+      dragging = true;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing");
+      event.preventDefault();
+    });
+    document.addEventListener("mousemove", (event) => {
+      if (dragging) {
+        app.style.setProperty("--side-panel-width", widthFromPointer(event.clientX) + "px");
+      }
+    });
+    document.addEventListener("mouseup", () => {
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+    });
+  }
+
   function wireThemeToggle() {
     const header = document.querySelector("header .controls");
     const button = document.createElement("button");
@@ -2712,6 +2859,7 @@
     polylinePath,
     allocateLanes,
     applyBoxOffsets,
+    tokenizeJava,
     isDragHandle,
     mergeLinksIntoCollapsedBoxes,
     reserveTraversedSegments,
@@ -2751,6 +2899,8 @@
     wireEntryPointPicker(index, view);
     wireModuleOverview(index);
     wireThemeToggle();
+    wireEntryPointToggle();
+    wireSidePanelResizer();
   }
 
   const MODULE_OVERVIEW_BUTTON_ID = "module-overview-button";

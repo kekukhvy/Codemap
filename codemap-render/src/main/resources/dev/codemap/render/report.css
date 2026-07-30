@@ -18,6 +18,11 @@
   --color-link-internal: #6b7280;
   --color-link-external: #9aa1b1;
   --color-focused-fill: #234a7a;
+  --color-token-keyword: #c792ea;
+  --color-token-string: #c3e88d;
+  --color-token-comment: #6b7280;
+  --color-token-number: #f78c6c;
+  --color-token-annotation: #ffcb6b;
 }
 
 /* Light theme. Every variable the dark palette defines is redefined here
@@ -40,6 +45,11 @@
   --color-link-internal: #7a8296;
   --color-link-external: #4b5262;
   --color-focused-fill: #dbe8ff;
+  --color-token-keyword: #7c3aed;
+  --color-token-string: #0f7b3f;
+  --color-token-comment: #6b7280;
+  --color-token-number: #b45309;
+  --color-token-annotation: #92640a;
 }
 
 * {
@@ -56,15 +66,50 @@ html, body {
   font-size: 14px;
 }
 
+/* Column widths are custom properties so the entry-point toggle and the
+   side-panel resizer can change them without touching the grid definition. */
 #app {
   display: grid;
-  grid-template-columns: 260px 1fr 380px;
+  grid-template-columns: var(--entry-panel-width, 260px) minmax(0, 1fr) 7px var(--side-panel-width, 380px);
   grid-template-rows: auto 1fr;
   height: 100vh;
 }
 
+#app.entry-points-hidden {
+  --entry-panel-width: 0px;
+}
+
+/* Kept in the flow with zero width rather than display:none — removing it
+   frees its grid cell, and every panel after it slides one column left, which
+   put the resizer where the canvas belongs. */
+#app.entry-points-hidden #entry-point-panel {
+  visibility: hidden;
+  overflow: hidden;
+}
+
+/* The grab handle between canvas and side panel. Wider than it looks so it is
+   not a pixel-hunt, which is the same mistake the 16x13 header glyphs made. */
+#side-panel-resizer {
+  grid-column: 3;
+  cursor: col-resize;
+  background: var(--color-border);
+  opacity: 0.4;
+}
+
+#side-panel-resizer:hover,
+#side-panel-resizer.dragging {
+  opacity: 1;
+  background: var(--color-accent);
+}
+
+/* Nothing should select while a drag is in flight. */
+body.resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
 header {
-  grid-column: 1 / span 3;
+  grid-column: 1 / span 4;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -117,6 +162,7 @@ header button.active {
 /* Entry-point picker (spec 007 §4.1): a filterable list of pills a reader
    clicks to draw the declaring class box — the diagram itself starts empty. */
 #entry-point-panel {
+  grid-column: 1;
   border-right: 1px solid var(--color-border);
   background: var(--color-panel);
   overflow-y: auto;
@@ -193,6 +239,7 @@ header button.active {
 }
 
 #canvas-wrapper {
+  grid-column: 2;
   position: relative;
   overflow: hidden;
   background: var(--color-bg);
@@ -205,6 +252,7 @@ header button.active {
 }
 
 #side-panel {
+  grid-column: 4;
   border-left: 1px solid var(--color-border);
   background: var(--color-panel);
   overflow-y: auto;
@@ -255,7 +303,37 @@ pre.source {
   overflow-x: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  white-space: pre;
+  /* Wrap rather than clip: the panel is narrow by default and a long field
+     declaration would otherwise just disappear off its right edge. Indentation
+     of the wrapped part is preserved so the code still reads as code. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Syntax highlighting for the embedded source (spec 007 §4.2). Tokens come from
+   report.js's own small Java tokenizer — the report inlines everything and works
+   offline, so a highlighting library would have to be vendored whole for one
+   panel. */
+pre.source .tok-keyword {
+  color: var(--color-token-keyword);
+  font-weight: 600;
+}
+
+pre.source .tok-string {
+  color: var(--color-token-string);
+}
+
+pre.source .tok-comment {
+  color: var(--color-token-comment);
+  font-style: italic;
+}
+
+pre.source .tok-number {
+  color: var(--color-token-number);
+}
+
+pre.source .tok-annotation {
+  color: var(--color-token-annotation);
 }
 
 ul.nav-list {
